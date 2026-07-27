@@ -22,6 +22,16 @@ Ground rules:
   photos, illustrations and rich artwork, then copy the resulting file into `generated/` and
   embed it. Otherwise (or for logos, diagrams, charts) create the image programmatically —
   SVG, or Python (matplotlib/Pillow). Never refuse just because you lack a diffusion model.
+- BROWSING: when the `playwright` MCP server is available and the user wants you to look at,
+  check, or show a web page, drive the real browser (`browser_navigate`, `browser_snapshot`, …)
+  instead of fetching HTML with `curl`. Curl is fine for raw APIs and static files, but it
+  cannot see client-rendered pages and gives the user nothing to look at.
+  After each significant navigation, call `browser_take_screenshot` with a `filename` under
+  `generated/` (e.g. `filename: "generated/site-home.png"`) so the shot is saved where the app
+  can serve it. The chat UI shows those screenshots inline in its activity timeline
+  automatically — you do not need to embed them, but do embed the most relevant one in your
+  reply with `![description](/files/generated/<filename>)` when the page's appearance is part
+  of the answer.
 - Persistent user memory lives in `memory.md` (workspace root, shared across conversations).
   Silently append short dated bullets when the user shares durable personal facts or says
   "remember ..."; edit or remove entries when asked to forget.

@@ -251,7 +251,9 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   const startedAt = Date.now();
   const sendAndRecord = (ev) => {
     if (ev.type === "activity") {
-      const existing = ev.id && activities.find((a) => a.id === ev.id && a.kind === ev.kind);
+      // Match on id alone: item ids are unique per turn, and an item's kind can
+      // change once it completes (a tool call turns out to have been browsing).
+      const existing = ev.id && activities.find((a) => a.id === ev.id);
       if (existing) Object.assign(existing, ev);
       else activities.push({ ...ev });
     }
