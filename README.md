@@ -17,7 +17,8 @@ The goal: a chat app a ChatGPT user feels immediately at home in, backed by a ge
 | 🧠 Persistent memory across chats | `workspace/memory.md`, auto-updated by the agent, editable in Settings |
 | ⚙️ Custom instructions & nickname | Settings modal, injected per conversation |
 | 🗂️ Conversation history | Sidebar with search, rename, delete, date grouping |
-| ⏳ Activity transparency | "Thinking…", "Searching the web…", "Running command…" chips like ChatGPT |
+| 🎛️ Model & reasoning picker | Top-bar dropdown: GPT-5.6 tiers or custom model id, effort minimal→xhigh |
+| 🧩 Live "Thinking" timeline | Every agentic action (reasoning, commands + output, searches, file edits) streams into an expandable per-message panel, saved and replayable |
 
 ## Quick start
 

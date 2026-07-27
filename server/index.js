@@ -143,11 +143,30 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
         ]
       : promptText;
 
+  // capture the agent's activity timeline so it can be replayed when the
+  // conversation is reopened (ChatGPT-style "thinking" expander)
+  const activities = [];
+  const startedAt = Date.now();
+  const sendAndRecord = (ev) => {
+    if (ev.type === "activity") {
+      const existing = ev.id && activities.find((a) => a.id === ev.id && a.kind === ev.kind);
+      if (existing) Object.assign(existing, ev);
+      else activities.push({ ...ev });
+    }
+    send(ev);
+  };
+
   try {
     const thread = getThread(conv.threadId);
-    const { threadId, finalText } = await runTurn(thread, input, send);
+    const { threadId, finalText } = await runTurn(thread, input, sendAndRecord);
     conv.threadId = threadId || conv.threadId;
-    conv.messages.push({ role: "assistant", text: finalText, ts: Date.now() });
+    conv.messages.push({
+      role: "assistant",
+      text: finalText,
+      activities,
+      durationMs: Date.now() - startedAt,
+      ts: Date.now(),
+    });
     saveConversation(conv);
     send({ type: "done", threadId: conv.threadId });
   } catch (err) {

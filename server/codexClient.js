@@ -1,19 +1,24 @@
 import { Codex } from "@openai/codex-sdk";
-import { WORKSPACE } from "./store.js";
+import { WORKSPACE, readSettings } from "./store.js";
 
 const codex = new Codex();
 
-const THREAD_OPTIONS = {
-  workingDirectory: WORKSPACE,
-  skipGitRepoCheck: true,
-  sandboxMode: "workspace-write",
-  webSearchEnabled: true,
-};
+function threadOptions() {
+  const settings = readSettings();
+  const opts = {
+    workingDirectory: WORKSPACE,
+    skipGitRepoCheck: true,
+    sandboxMode: "workspace-write",
+    webSearchEnabled: true,
+  };
+  if (settings.model?.trim()) opts.model = settings.model.trim();
+  if (settings.reasoningEffort?.trim()) opts.modelReasoningEffort = settings.reasoningEffort.trim();
+  return opts;
+}
 
 export function getThread(threadId) {
-  return threadId
-    ? codex.resumeThread(threadId, THREAD_OPTIONS)
-    : codex.startThread(THREAD_OPTIONS);
+  const opts = threadOptions();
+  return threadId ? codex.resumeThread(threadId, opts) : codex.startThread(opts);
 }
 
 // Runs one turn and forwards simplified events to `emit(event)`.
@@ -33,6 +38,7 @@ export async function runTurn(thread, input, emit) {
       case "item.completed": {
         const item = event.item;
         const done = event.type === "item.completed";
+        const id = item.id || null;
         switch (item.type) {
           case "agent_message":
             if (item.text) {
@@ -46,18 +52,20 @@ export async function runTurn(thread, input, emit) {
               emit({ type: done ? "assistant" : "assistant_delta", text: finalText });
             }
             break;
-          case "reasoning":
-            emit({
-              type: "activity",
-              kind: "reasoning",
-              label: "Thinking",
-              detail: (item.summary || []).join("\n"),
-              done,
-            });
+          case "reasoning": {
+            // exec events expose reasoning as `text`; app-server protocol uses
+            // summary/content arrays — handle whichever shape arrives.
+            const text =
+              item.text ||
+              (Array.isArray(item.summary) ? item.summary.join("\n") : "") ||
+              (Array.isArray(item.content) ? item.content.join("\n") : "");
+            emit({ type: "activity", id, kind: "reasoning", label: "Thinking", detail: text, done });
             break;
+          }
           case "command_execution":
             emit({
               type: "activity",
+              id,
               kind: "command",
               label: done ? "Ran command" : "Running command",
               detail: item.command,
@@ -69,6 +77,7 @@ export async function runTurn(thread, input, emit) {
           case "web_search":
             emit({
               type: "activity",
+              id,
               kind: "search",
               label: done ? "Searched the web" : "Searching the web",
               detail: item.query,
@@ -78,8 +87,9 @@ export async function runTurn(thread, input, emit) {
           case "file_change":
             emit({
               type: "activity",
+              id,
               kind: "file",
-              label: "Edited files",
+              label: done ? "Edited files" : "Editing files",
               detail: (item.changes || []).map((c) => c.path).join(", "),
               done,
             });
@@ -87,14 +97,27 @@ export async function runTurn(thread, input, emit) {
           case "mcp_tool_call":
             emit({
               type: "activity",
+              id,
               kind: "tool",
               label: `Using ${item.server}`,
               detail: item.tool,
               done,
             });
             break;
+          case "todo_list":
+            emit({
+              type: "activity",
+              id,
+              kind: "plan",
+              label: "Planning",
+              detail: (item.items || [])
+                .map((t) => `${t.completed ? "☑" : "☐"} ${t.text}`)
+                .join("\n"),
+              done,
+            });
+            break;
           case "error":
-            emit({ type: "activity", kind: "error", label: "Error", detail: item.message, done: true });
+            emit({ type: "activity", id, kind: "error", label: "Error", detail: item.message, done: true });
             break;
         }
         break;

@@ -179,45 +179,100 @@ function addUserMessage(text, attachments = []) {
   scrollToBottom();
 }
 
+function fmtDuration(ms) {
+  const s = Math.max(1, Math.round(ms / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function buildAgentPanel(open) {
+  const panel = document.createElement("div");
+  panel.className = "agent-panel" + (open ? " open" : "");
+  const header = document.createElement("button");
+  header.className = "agent-header";
+  header.innerHTML =
+    '<svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg><span class="agent-title"></span>';
+  const timeline = document.createElement("div");
+  timeline.className = "agent-timeline";
+  header.addEventListener("click", () => panel.classList.toggle("open"));
+  panel.append(header, timeline);
+  return { panel, timeline, title: header.querySelector(".agent-title") };
+}
+
+function renderActivityEntry(timeline, items, ev) {
+  const key = ev.id || ev.kind + "|" + (ev.detail || ev.label);
+  let node = items.get(key);
+  if (!node) {
+    node = document.createElement("div");
+    node.innerHTML =
+      '<div class="activity-row"><span class="ind"></span><span class="label"></span></div><span class="detail"></span>';
+    timeline.appendChild(node);
+    items.set(key, node);
+  }
+  node.className = "activity kind-" + ev.kind;
+  node.querySelector(".ind").className = "ind" + (ev.done ? "" : " spinner");
+  const label = node.querySelector(".label");
+  label.textContent = ev.kind === "reasoning" ? "" : ev.label;
+  node.querySelector(".detail").textContent = ev.detail || "";
+  if (ev.output && !node.querySelector(".output")) {
+    const toggle = document.createElement("button");
+    toggle.className = "output-toggle";
+    toggle.textContent = "Show output";
+    const out = document.createElement("div");
+    out.className = "output collapsed";
+    toggle.addEventListener("click", () => {
+      out.classList.toggle("collapsed");
+      toggle.textContent = out.classList.contains("collapsed") ? "Show output" : "Hide output";
+    });
+    node.append(toggle, out);
+  }
+  if (ev.output) node.querySelector(".output").textContent = ev.output;
+}
+
 function addAssistantShell() {
   const msg = document.createElement("div");
   msg.className = "msg assistant";
-  const activity = document.createElement("div");
-  activity.className = "activity-list";
-  const thinking = document.createElement("div");
-  thinking.className = "thinking-shimmer";
-  thinking.textContent = "Thinking";
-  activity.appendChild(thinking);
+  const { panel, timeline, title } = buildAgentPanel(true);
+  title.className = "agent-title thinking-shimmer";
+  title.textContent = "Thinking…";
   const content = document.createElement("div");
   content.className = "content";
-  msg.append(activity, content);
+  msg.append(panel, content);
   messagesEl.appendChild(msg);
   scrollToBottom();
-  return { msg, activity, content, thinking, activityItems: new Map() };
+  const shell = {
+    msg,
+    panel,
+    timeline,
+    title,
+    content,
+    activityItems: new Map(),
+    startedAt: Date.now(),
+    finalized: false,
+  };
+  shell.timer = setInterval(() => {
+    if (shell.title.classList.contains("thinking-shimmer")) {
+      shell.title.textContent = `Thinking… ${fmtDuration(Date.now() - shell.startedAt)}`;
+    }
+  }, 1000);
+  return shell;
+}
+
+function finalizeShell(shell) {
+  if (shell.finalized) return;
+  shell.finalized = true;
+  clearInterval(shell.timer);
+  if (shell.activityItems.size === 0) {
+    shell.panel.remove();
+    return;
+  }
+  shell.timeline.querySelectorAll(".spinner").forEach((s) => (s.className = "ind"));
+  shell.title.className = "agent-title";
+  shell.title.textContent = `Worked for ${fmtDuration(Date.now() - shell.startedAt)}`;
+  shell.panel.classList.remove("open");
 }
 
 function upsertActivity(shell, ev) {
-  shell.thinking?.remove();
-  shell.thinking = null;
-  const key = ev.kind + "|" + (ev.detail || ev.label);
-  let node = shell.activityItems.get(key);
-  if (!node) {
-    node = document.createElement("div");
-    node.className = "activity";
-    node.innerHTML = `<div class="activity-row"><span class="ind"></span><span class="label"></span><span class="detail"></span></div><div class="output"></div>`;
-    shell.activity.appendChild(node);
-    shell.activityItems.set(key, node);
-  }
-  const row = node.querySelector(".activity-row");
-  const ind = node.querySelector(".ind");
-  ind.className = "ind " + (ev.done ? "dot" : "spinner");
-  node.querySelector(".label").textContent = ev.label;
-  node.querySelector(".detail").textContent = ev.detail || "";
-  if (ev.output) {
-    node.querySelector(".output").textContent = ev.output;
-    row.classList.add("expandable");
-    row.onclick = () => node.classList.toggle("open");
-  }
+  renderActivityEntry(shell.timeline, shell.activityItems, ev);
   scrollToBottom();
 }
 
@@ -234,6 +289,13 @@ function renderConversation() {
     else {
       const msg = document.createElement("div");
       msg.className = "msg assistant";
+      if (m.activities?.length) {
+        const { panel, timeline, title } = buildAgentPanel(false);
+        title.textContent = `Worked for ${fmtDuration(m.durationMs || 0)}`;
+        const items = new Map();
+        for (const ev of m.activities) renderActivityEntry(timeline, items, { ...ev, done: true });
+        msg.appendChild(panel);
+      }
       const content = document.createElement("div");
       content.className = "content";
       content.appendChild(renderMarkdown(m.text));
@@ -313,7 +375,7 @@ async function sendMessage() {
       shell.content.appendChild(renderMarkdown(`⚠️ **Error:** ${err.message}`));
     }
   } finally {
-    shell.thinking?.remove();
+    finalizeShell(shell);
     if (!gotFinal && shell.content.childNodes.length === 0) {
       shell.content.appendChild(renderMarkdown("_(no response)_"));
     }
@@ -332,8 +394,6 @@ function handleStreamEvent(ev, shell, markFinal) {
       break;
     case "assistant_delta":
     case "assistant":
-      shell.thinking?.remove();
-      shell.thinking = null;
       shell.content.innerHTML = "";
       shell.content.appendChild(renderMarkdown(ev.text));
       if (ev.type === "assistant") markFinal();
@@ -344,6 +404,7 @@ function handleStreamEvent(ev, shell, markFinal) {
       break;
     case "done":
       markFinal();
+      finalizeShell(shell);
       break;
   }
 }
@@ -450,6 +511,53 @@ $("#settings-save").addEventListener("click", async () => {
   backdrop.hidden = true;
 });
 
+/* ---------------- model & effort picker ---------------- */
+
+const modelMenu = $("#model-menu");
+const modelLabel = $("#model-label");
+const modelCustom = $("#model-custom");
+let currentSettings = {};
+
+function updateModelUI() {
+  const model = currentSettings.model || "";
+  const effort = currentSettings.reasoningEffort || "";
+  modelLabel.textContent = (model || "codex") + (effort ? ` · ${effort}` : "");
+  const presets = [...modelMenu.querySelectorAll("[data-model]")].map((b) => b.dataset.model);
+  modelMenu.querySelectorAll("[data-model]").forEach((b) =>
+    b.classList.toggle("selected", b.dataset.model === model));
+  modelMenu.querySelectorAll("[data-effort]").forEach((b) =>
+    b.classList.toggle("selected", b.dataset.effort === effort));
+  modelCustom.value = model && !presets.includes(model) ? model : "";
+}
+
+async function saveModelSettings(patch) {
+  currentSettings = await fetch("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  }).then((r) => r.json());
+  updateModelUI();
+}
+
+async function loadModelSettings() {
+  currentSettings = await fetch("/api/settings").then((r) => r.json());
+  updateModelUI();
+}
+
+$("#model-badge").addEventListener("click", (e) => {
+  e.stopPropagation();
+  modelMenu.hidden = !modelMenu.hidden;
+});
+modelMenu.addEventListener("click", (e) => e.stopPropagation());
+modelMenu.querySelectorAll("[data-model]").forEach((b) =>
+  b.addEventListener("click", () => saveModelSettings({ model: b.dataset.model })));
+modelMenu.querySelectorAll("[data-effort]").forEach((b) =>
+  b.addEventListener("click", () => saveModelSettings({ reasoningEffort: b.dataset.effort })));
+modelCustom.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") saveModelSettings({ model: modelCustom.value.trim() });
+});
+document.addEventListener("click", () => (modelMenu.hidden = true));
+
 /* ---------------- misc ---------------- */
 
 $("#new-chat-btn").addEventListener("click", newChat);
@@ -458,3 +566,4 @@ searchInput.addEventListener("input", renderConvList);
 
 newChat();
 loadConversations();
+loadModelSettings();

@@ -82,7 +82,7 @@ export function readSettings() {
   try {
     return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
   } catch {
-    return { customInstructions: "", nickname: "", memoryEnabled: true };
+    return { customInstructions: "", nickname: "", memoryEnabled: true, model: "", reasoningEffort: "" };
   }
 }
 
