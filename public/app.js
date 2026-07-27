@@ -610,7 +610,7 @@ const modeMenu = $("#mode-menu");
 const modeBtn = $("#mode-btn");
 
 function updateModeUI() {
-  const labels = { "": "Research", wide: "Research: Wide", deep: "Research: Deep" };
+  const labels = { "": "Research", wide: "Research: Wide", deep: "Research: Deep", heavy: "Research: Heavy" };
   $("#mode-label").textContent = labels[currentMode];
   modeBtn.classList.toggle("active", !!currentMode);
   modeMenu.querySelectorAll("[data-mode]").forEach((b) =>

@@ -17,9 +17,14 @@ function threadOptions() {
   return opts;
 }
 
+// A brand-new thread in the same workspace, unattached to any conversation
+// (used for heavy-research sub-researchers).
+export function startThread() {
+  return codex.startThread(threadOptions());
+}
+
 export function getThread(threadId) {
-  const opts = threadOptions();
-  return threadId ? codex.resumeThread(threadId, opts) : codex.startThread(opts);
+  return threadId ? codex.resumeThread(threadId, threadOptions()) : startThread();
 }
 
 // Runs one turn and forwards simplified events to `emit(event)`.

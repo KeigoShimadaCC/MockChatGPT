@@ -2,6 +2,8 @@ node_modules/
 data/
 workspace/uploads/
 workspace/generated/
+workspace/notes/
+workspace/research_notes.md
 workspace/memory.md
 .DS_Store
 *.log

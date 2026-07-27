@@ -37,7 +37,14 @@ MockChatGPT ships a composer-level mode picker (the Grok-style dial) with per-tu
 - **Research: Wide** — breadth-first: plan 6–10 angles silently, ≥8 distinct queries, 15+ sources, structured report with a conflicting-information section and inline citation on every claim. (First live run: 10 searches, 48 citations, 15.5k-char report.)
 - **Research: Deep** — depth-first: plan written to `research_notes.md` (the scratchpad pattern), ≥3 search→read→gap-analysis rounds where later rounds chase specifics surfaced earlier, report with an explicit "what remains uncertain" section.
 
-Deliberate simplifications vs. the big players: no parallel subagents (Codex SDK runs one agent per thread; the wide sweep is sequential batching), no post-hoc citation agent (inline citation discipline is prompted instead), and no editable-plan UI yet (a natural next step: emit the plan, pause for user edit, then continue).
+- **Research: Heavy** — the orchestrator–worker shape (Claude Research's), implemented in `server/heavyResearch.js`. Three phases inside one SSE stream:
+  1. **Plan** — a turn on the conversation's own thread (so the plan stays in context for phase 3) decomposes the question into 3–4 independent, self-contained sub-questions, emitted as a fenced ` ```subquestions ` JSON array. Its prose is kept out of the message body; only the parsed list surfaces, as a timeline row.
+  2. **Workers** — one throwaway Codex thread per sub-question (`startThread()`, same workspace), all awaited under a single `Promise.all`. Each is bounded by prompt: ≤6 web searches, no shared-file writes except `notes/sub-<i>.md`, final message *is* the deliverable. Their events are forwarded into the same stream with ids namespaced `sub<i>-…` and labels prefixed "Sub-researcher <i>", so the timeline renders parallel lanes instead of collapsing two workers' identical searches into one row.
+  3. **Synthesis** — the collected summaries go back to the conversation thread, which writes one cited report in a single narrative voice and is told to resolve disagreements explicitly.
+
+  Guardrails: max 4 workers; a 10-minute wall-clock deadline per phase (`Promise.race` against a timer); isolated worker failure — one that throws or times out becomes an error row while synthesis proceeds with the survivors, its sub-question named to the synthesizer as a coverage gap. If the `subquestions` block can't be parsed the run degrades to the single-agent wide protocol rather than failing.
+
+Deliberate simplifications vs. the big players: no post-hoc citation agent (inline citation discipline is prompted instead), and no editable-plan UI yet (a natural next step: emit the plan, pause for user edit, then continue). Heavy mode closes the "no parallel subagents" gap — the Codex SDK runs one agent per thread, so parallelism comes from spawning several threads and multiplexing their event streams rather than from one agent fanning out.
 
 ## Sources
 

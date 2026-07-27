@@ -23,6 +23,7 @@ import {
 } from "./store.js";
 import { buildPreamble, researchProtocol } from "./prompts.js";
 import { getThread, runTurn } from "./codexClient.js";
+import { runHeavyResearch } from "./heavyResearch.js";
 import { listServers, installServer, removeServer } from "./mcp.js";
 import { listTasks, createTask, updateTask, deleteTask, runTask, startScheduler } from "./scheduler.js";
 
@@ -260,7 +261,10 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
 
   try {
     const thread = getThread(conv.threadId);
-    const { threadId, finalText } = await runTurn(thread, input, sendAndRecord);
+    const { threadId, finalText } =
+      researchMode === "heavy"
+        ? await runHeavyResearch(thread, input, sendAndRecord, text)
+        : await runTurn(thread, input, sendAndRecord);
     conv.threadId = threadId || conv.threadId;
     conv.messages.push({
       role: "assistant",
