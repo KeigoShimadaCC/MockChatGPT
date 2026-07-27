@@ -18,6 +18,10 @@ The goal: a chat app a ChatGPT user feels immediately at home in, backed by a ge
 | ⚙️ Custom instructions & nickname | Settings modal, injected per conversation |
 | 🗂️ Conversation history | Sidebar with search, rename, delete, date grouping |
 | 🎛️ Model & reasoning picker | Top-bar dropdown: GPT-5.6 tiers or custom model id, effort minimal→xhigh |
+| 🔬 Deep research modes | Composer picker: **Wide** (broad multi-angle sweep, 15+ sources) or **Deep** (iterative rounds with a notes scratchpad); see docs/05 |
+| ⏰ Scheduled tasks | Daily/weekly/interval/once schedules; each run is a real agent turn logged to a "⏰" conversation |
+| 📁 Projects | Group chats with per-project instructions and files |
+| 🧩 Connectors (MCP) | Catalog + custom install/uninstall backed by `codex mcp`; or just ask in chat — the agent proposes, you approve |
 | 🧩 Live "Thinking" timeline | Every agentic action (reasoning, commands + output, searches, file edits) streams into an expandable per-message panel, saved and replayable |
 
 ## Quick start
@@ -53,6 +57,7 @@ data/        ← conversations + settings (JSON)
 2. [Codex SDK deep dive](docs/02-codex-sdk.md)
 3. [Free MCP servers to fill capability gaps](docs/03-mcp-options.md)
 4. [Which capabilities Codex SDK covers](docs/04-codex-capability-mapping.md)
+5. [How the industry builds deep research (and our mode design)](docs/05-deep-research-modes.md)
 
 ## Known gaps vs. real ChatGPT
 

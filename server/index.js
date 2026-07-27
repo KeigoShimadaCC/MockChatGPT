@@ -6,6 +6,7 @@ import {
   ROOT,
   WORKSPACE,
   UPLOADS_DIR,
+  PROJECT_FILES_DIR,
   listConversations,
   getConversation,
   saveConversation,
@@ -15,9 +16,15 @@ import {
   writeMemory,
   readSettings,
   writeSettings,
+  listProjects,
+  createProject,
+  updateProject,
+  deleteProject,
 } from "./store.js";
-import { buildPreamble } from "./prompts.js";
+import { buildPreamble, researchProtocol } from "./prompts.js";
 import { getThread, runTurn } from "./codexClient.js";
+import { listServers, installServer, removeServer } from "./mcp.js";
+import { listTasks, createTask, updateTask, deleteTask, runTask, startScheduler } from "./scheduler.js";
 
 const app = express();
 const PORT = process.env.PORT || 3939;
@@ -44,9 +51,80 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
+// ---------- projects ----------
+app.get("/api/projects", (req, res) => res.json(listProjects()));
+app.post("/api/projects", (req, res) => {
+  try {
+    res.json(createProject(req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.patch("/api/projects/:id", (req, res) => {
+  try {
+    res.json(updateProject(req.params.id, req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.delete("/api/projects/:id", (req, res) => {
+  deleteProject(req.params.id);
+  res.json({ ok: true });
+});
+
+// ---------- scheduled tasks ----------
+app.get("/api/tasks", (req, res) => res.json(listTasks()));
+app.post("/api/tasks", (req, res) => {
+  try {
+    res.json(createTask(req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.patch("/api/tasks/:id", (req, res) => {
+  try {
+    res.json(updateTask(req.params.id, req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.delete("/api/tasks/:id", (req, res) => {
+  deleteTask(req.params.id);
+  res.json({ ok: true });
+});
+app.post("/api/tasks/:id/run", (req, res) => {
+  runTask(req.params.id)
+    .then(() => console.log("[tasks] manual run finished"))
+    .catch((e) => console.error("[tasks]", e));
+  res.json({ ok: true, started: true });
+});
+
+// ---------- MCP connectors ----------
+app.get("/api/mcp", async (req, res) => {
+  try {
+    res.json(await listServers());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+app.post("/api/mcp/install", async (req, res) => {
+  try {
+    res.json(await installServer(req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.delete("/api/mcp/:name", async (req, res) => {
+  try {
+    res.json(await removeServer(req.params.name));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // ---------- conversations ----------
 app.get("/api/conversations", (req, res) => res.json(listConversations()));
-app.post("/api/conversations", (req, res) => res.json(createConversation()));
+app.post("/api/conversations", (req, res) => res.json(createConversation(req.body?.projectId || null)));
 app.get("/api/conversations/:id", (req, res) => {
   const c = getConversation(req.params.id);
   if (!c) return res.status(404).json({ error: "not found" });
@@ -64,6 +142,29 @@ app.delete("/api/conversations/:id", (req, res) => {
 });
 
 // ---------- uploads ----------
+const projectUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(PROJECT_FILES_DIR, req.params.id.replace(/[^\w-]/g, ""));
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => cb(null, file.originalname.replace(/[^\w.\-() ]/g, "_")),
+  }),
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
+app.post("/api/projects/:id/files", projectUpload.array("files", 16), (req, res) => {
+  res.json({ files: (req.files || []).map((f) => f.originalname) });
+});
+app.get("/api/projects/:id/files", (req, res) => {
+  const dir = path.join(PROJECT_FILES_DIR, req.params.id.replace(/[^\w-]/g, ""));
+  try {
+    res.json({ files: fs.readdirSync(dir) });
+  } catch {
+    res.json({ files: [] });
+  }
+});
+
 app.post("/api/upload", upload.array("files", 8), (req, res) => {
   res.json({
     files: (req.files || []).map((f) => ({
@@ -94,7 +195,7 @@ app.put("/api/settings", (req, res) => {
 app.post("/api/conversations/:id/messages", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ error: "not found" });
-  const { text = "", attachments = [] } = req.body || {};
+  const { text = "", attachments = [], researchMode = "" } = req.body || {};
   if (!text.trim() && attachments.length === 0) return res.status(400).json({ error: "empty message" });
 
   res.writeHead(200, {
@@ -122,7 +223,8 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   // build codex input
   const isFirstTurn = !conv.threadId;
   let promptText = "";
-  if (isFirstTurn) promptText += buildPreamble() + "\n\n";
+  if (isFirstTurn) promptText += buildPreamble(conv.projectId) + "\n\n";
+  promptText += researchProtocol(researchMode);
   const nonImageFiles = attachments.filter((a) => !a.isImage);
   if (nonImageFiles.length) {
     promptText += `[The user attached files, available in your workspace: ${nonImageFiles
@@ -183,4 +285,5 @@ app.listen(PORT, () => {
   if (!fs.existsSync(path.join(WORKSPACE, "AGENTS.md"))) {
     console.warn("note: workspace/AGENTS.md missing");
   }
+  startScheduler();
 });

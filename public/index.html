@@ -26,8 +26,20 @@
           <input id="search-input" type="text" placeholder="Search chats" />
         </div>
       </div>
+      <div id="projects-section">
+        <div class="section-head"><span>Projects</span><button id="project-add-btn" title="New project">＋</button></div>
+        <div id="project-list"></div>
+      </div>
       <nav id="conv-list"></nav>
       <div class="sidebar-bottom">
+        <button id="tasks-btn" class="sidebar-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          <span>Scheduled tasks</span>
+        </button>
+        <button id="mcp-btn" class="sidebar-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 9.4 7.55 4.24M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></svg>
+          <span>Connectors</span>
+        </button>
         <button id="settings-btn" class="sidebar-item">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span>Settings</span>
@@ -79,6 +91,17 @@
             <button id="attach-btn" title="Attach files">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
             </button>
+            <div id="mode-picker">
+              <button id="mode-btn" title="Research mode">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                <span id="mode-label">Research</span>
+              </button>
+              <div id="mode-menu" hidden>
+                <button class="menu-item" data-mode="">Standard <span class="menu-desc">no research pass</span></button>
+                <button class="menu-item" data-mode="wide">Research: Wide <span class="menu-desc">many sources, broad sweep</span></button>
+                <button class="menu-item" data-mode="deep">Research: Deep <span class="menu-desc">iterative, follows the trail</span></button>
+              </div>
+            </div>
             <textarea id="prompt-input" rows="1" placeholder="Ask anything"></textarea>
             <button id="send-btn" disabled title="Send">
               <svg id="send-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
@@ -90,6 +113,82 @@
       </div>
       <input type="file" id="file-input" multiple hidden />
     </main>
+
+    <!-- Tasks modal -->
+    <div id="tasks-backdrop" class="backdrop" hidden>
+      <div class="modal">
+        <div class="modal-header"><h2>Scheduled tasks</h2><button class="modal-x" data-close="tasks-backdrop">✕</button></div>
+        <div class="modal-body">
+          <div id="task-list"></div>
+          <div class="task-form">
+            <label class="field"><span>New task — what should MockChatGPT do?</span>
+              <textarea id="task-prompt" rows="2" placeholder="e.g. Search the news for AI funding rounds in Japan and summarize the top 3."></textarea>
+            </label>
+            <div class="form-row">
+              <select id="task-type">
+                <option value="daily">Every day</option>
+                <option value="weekly">Every week</option>
+                <option value="interval">Every N minutes</option>
+                <option value="once">Once</option>
+              </select>
+              <input id="task-time" type="time" value="09:00" />
+              <select id="task-weekday" hidden>
+                <option value="1">Mon</option><option value="2">Tue</option><option value="3">Wed</option>
+                <option value="4">Thu</option><option value="5">Fri</option><option value="6">Sat</option><option value="0">Sun</option>
+              </select>
+              <input id="task-minutes" type="number" min="5" value="60" hidden style="width:80px" />
+              <input id="task-once" type="datetime-local" hidden />
+              <button id="task-create" class="primary">Create</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Connectors modal -->
+    <div id="mcp-backdrop" class="backdrop" hidden>
+      <div class="modal">
+        <div class="modal-header"><h2>Connectors (MCP)</h2><button class="modal-x" data-close="mcp-backdrop">✕</button></div>
+        <div class="modal-body">
+          <div class="mcp-note">Connectors are MCP servers registered with your local Codex (<code>codex mcp</code>). They become tools the agent can use in any chat. You can also just ask MockChatGPT in chat — e.g. "add the Playwright MCP" — and approve its proposal.</div>
+          <h3>Installed</h3>
+          <div id="mcp-installed"></div>
+          <h3>Catalog</h3>
+          <div id="mcp-catalog"></div>
+          <h3>Add custom</h3>
+          <div class="form-row">
+            <input id="mcp-name" type="text" placeholder="name" style="width:120px" />
+            <input id="mcp-cmd" type="text" placeholder="command, e.g. npx -y some-mcp@latest" style="flex:1" />
+            <button id="mcp-add" class="primary">Add</button>
+          </div>
+          <div class="mcp-note">For servers needing keys, append env like <code>KEY=value</code> pairs after the command, or ask the agent in chat to set it up.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Project modal -->
+    <div id="project-backdrop" class="backdrop" hidden>
+      <div class="modal">
+        <div class="modal-header"><h2 id="project-modal-title">New project</h2><button class="modal-x" data-close="project-backdrop">✕</button></div>
+        <div class="modal-body">
+          <label class="field"><span>Name</span><input id="project-name" type="text" placeholder="e.g. Fund II research" /></label>
+          <label class="field"><span>Project instructions</span>
+            <textarea id="project-instructions" rows="4" placeholder="Context and instructions applied to every chat in this project."></textarea>
+          </label>
+          <div id="project-files-wrap" hidden>
+            <div class="field"><span>Project files</span>
+              <div id="project-file-list" class="mcp-note"></div>
+              <button id="project-file-add" class="ghost">Upload files…</button>
+              <input id="project-file-input" type="file" multiple hidden />
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="project-delete" class="danger-btn" hidden>Delete project</button>
+          <button id="project-save" class="primary">Save</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Settings modal -->
     <div id="modal-backdrop" hidden>

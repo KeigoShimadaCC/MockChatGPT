@@ -30,6 +30,13 @@ function renderMarkdown(md) {
   tpl.querySelectorAll("pre > code").forEach((code) => {
     const pre = code.parentElement;
     const lang = (code.className.match(/language-([\w+-]+)/) || [])[1] || "";
+    if (lang === "mcp-install") {
+      const card = buildMcpInstallCard(code.textContent);
+      if (card) {
+        pre.replaceWith(card);
+        return;
+      }
+    }
     const wrap = document.createElement("div");
     wrap.className = "code-block";
     const header = document.createElement("div");
@@ -76,6 +83,7 @@ function renderConvList() {
   let lastGroup = null;
   for (const c of conversations) {
     if (q && !c.title.toLowerCase().includes(q)) continue;
+    if (selectedProjectId && c.projectId !== selectedProjectId) continue;
     const g = groupLabel(c.updatedAt);
     if (g !== lastGroup) {
       const label = document.createElement("div");
@@ -331,7 +339,11 @@ async function sendMessage() {
   if (!text && pendingAttachments.length === 0) return;
 
   if (!currentConv) {
-    currentConv = await fetch("/api/conversations", { method: "POST" }).then((r) => r.json());
+    currentConv = await fetch("/api/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: selectedProjectId }),
+    }).then((r) => r.json());
   }
   const attachments = pendingAttachments.slice();
   pendingAttachments = [];
@@ -349,7 +361,7 @@ async function sendMessage() {
     const res = await fetch(`/api/conversations/${currentConv.id}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, attachments }),
+      body: JSON.stringify({ text, attachments, researchMode: currentMode }),
       signal: streamAbort.signal,
     });
     const reader = res.body.getReader();
@@ -591,6 +603,355 @@ modelCustom.addEventListener("keydown", (e) => {
 });
 document.addEventListener("click", () => (modelMenu.hidden = true));
 
+/* ---------------- research mode ---------------- */
+
+let currentMode = "";
+const modeMenu = $("#mode-menu");
+const modeBtn = $("#mode-btn");
+
+function updateModeUI() {
+  const labels = { "": "Research", wide: "Research: Wide", deep: "Research: Deep" };
+  $("#mode-label").textContent = labels[currentMode];
+  modeBtn.classList.toggle("active", !!currentMode);
+  modeMenu.querySelectorAll("[data-mode]").forEach((b) =>
+    b.classList.toggle("selected", b.dataset.mode === currentMode));
+}
+modeBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  modeMenu.hidden = !modeMenu.hidden;
+});
+modeMenu.addEventListener("click", (e) => e.stopPropagation());
+modeMenu.querySelectorAll("[data-mode]").forEach((b) =>
+  b.addEventListener("click", () => {
+    currentMode = b.dataset.mode;
+    modeMenu.hidden = true;
+    updateModeUI();
+  }));
+document.addEventListener("click", () => (modeMenu.hidden = true));
+
+/* ---------------- projects ---------------- */
+
+let projects = [];
+let selectedProjectId = null;
+let editingProjectId = null;
+
+async function loadProjects() {
+  projects = await fetch("/api/projects").then((r) => r.json());
+  renderProjects();
+}
+
+function renderProjects() {
+  const list = $("#project-list");
+  list.innerHTML = "";
+  for (const p of projects) {
+    const item = document.createElement("div");
+    item.className = "project-item" + (selectedProjectId === p.id ? " active" : "");
+    const icon = document.createElement("span");
+    icon.className = "icon";
+    icon.textContent = "📁";
+    const name = document.createElement("span");
+    name.className = "p-name";
+    name.textContent = p.name;
+    const menu = document.createElement("button");
+    menu.className = "conv-menu-btn";
+    menu.textContent = "⋯";
+    menu.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openProjectModal(p.id);
+    });
+    item.append(icon, name, menu);
+    item.addEventListener("click", () => {
+      selectedProjectId = selectedProjectId === p.id ? null : p.id;
+      renderProjects();
+      renderConvList();
+      newChat();
+    });
+    list.appendChild(item);
+  }
+}
+
+function openProjectModal(id) {
+  editingProjectId = id;
+  const p = id && projects.find((p) => p.id === id);
+  $("#project-modal-title").textContent = p ? "Edit project" : "New project";
+  $("#project-name").value = p?.name || "";
+  $("#project-instructions").value = p?.instructions || "";
+  $("#project-delete").hidden = !p;
+  $("#project-files-wrap").hidden = !p;
+  if (p) refreshProjectFiles(p.id);
+  $("#project-backdrop").hidden = false;
+}
+
+async function refreshProjectFiles(id) {
+  const { files } = await fetch(`/api/projects/${id}/files`).then((r) => r.json());
+  $("#project-file-list").textContent = files.length ? files.join(" · ") : "No files yet.";
+}
+
+$("#project-add-btn").addEventListener("click", () => openProjectModal(null));
+$("#project-save").addEventListener("click", async () => {
+  const body = { name: $("#project-name").value, instructions: $("#project-instructions").value };
+  if (editingProjectId) {
+    await fetch(`/api/projects/${editingProjectId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+  } else {
+    const p = await fetch("/api/projects", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }).then((r) => r.json());
+    if (p.id) selectedProjectId = p.id;
+  }
+  $("#project-backdrop").hidden = true;
+  await loadProjects();
+  renderConvList();
+});
+$("#project-delete").addEventListener("click", async () => {
+  if (!editingProjectId) return;
+  if (!confirm("Delete this project? Its chats are kept (moved out of the project).")) return;
+  await fetch(`/api/projects/${editingProjectId}`, { method: "DELETE" });
+  if (selectedProjectId === editingProjectId) selectedProjectId = null;
+  $("#project-backdrop").hidden = true;
+  await loadProjects();
+  await loadConversations();
+});
+$("#project-file-add").addEventListener("click", () => $("#project-file-input").click());
+$("#project-file-input").addEventListener("change", async () => {
+  const input = $("#project-file-input");
+  if (!input.files.length || !editingProjectId) return;
+  const fd = new FormData();
+  for (const f of input.files) fd.append("files", f);
+  input.value = "";
+  await fetch(`/api/projects/${editingProjectId}/files`, { method: "POST", body: fd });
+  refreshProjectFiles(editingProjectId);
+});
+
+/* ---------------- scheduled tasks ---------------- */
+
+const TASK_TYPE_FIELDS = { daily: ["task-time"], weekly: ["task-weekday", "task-time"], interval: ["task-minutes"], once: ["task-once"] };
+
+$("#task-type").addEventListener("change", () => {
+  const visible = TASK_TYPE_FIELDS[$("#task-type").value];
+  for (const id of ["task-time", "task-weekday", "task-minutes", "task-once"]) {
+    document.getElementById(id).hidden = !visible.includes(id);
+  }
+});
+
+function fmtWhen(ts) {
+  return ts ? new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+}
+
+async function refreshTasks() {
+  const tasks = await fetch("/api/tasks").then((r) => r.json());
+  const list = $("#task-list");
+  list.innerHTML = tasks.length ? "" : '<div class="mcp-note">No scheduled tasks yet.</div>';
+  for (const t of tasks) {
+    const row = document.createElement("div");
+    row.className = "task-row";
+    const grow = document.createElement("div");
+    grow.className = "grow";
+    grow.innerHTML = `<div class="t-prompt"></div><div class="meta"></div>`;
+    grow.querySelector(".t-prompt").textContent = t.prompt;
+    grow.querySelector(".meta").textContent =
+      `${t.enabled ? "next " + fmtWhen(t.nextRun) : "paused"} · last ${fmtWhen(t.lastRun)}${t.lastStatus && t.lastStatus !== "ok" ? " · " + t.lastStatus : ""}`;
+    row.appendChild(grow);
+    const mk = (label, fn, danger) => {
+      const b = document.createElement("button");
+      b.className = "mini-btn" + (danger ? " danger" : "");
+      b.textContent = label;
+      b.addEventListener("click", fn);
+      row.appendChild(b);
+    };
+    if (t.conversationId) mk("View", () => { $("#tasks-backdrop").hidden = true; openConversation(t.conversationId); });
+    mk("Run now", async () => { await fetch(`/api/tasks/${t.id}/run`, { method: "POST" }); alert("Started — the result will appear in the task's chat shortly."); });
+    mk(t.enabled ? "Pause" : "Resume", async () => {
+      await fetch(`/api/tasks/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !t.enabled }) });
+      refreshTasks();
+    });
+    mk("Delete", async () => {
+      await fetch(`/api/tasks/${t.id}`, { method: "DELETE" });
+      refreshTasks();
+    }, true);
+    list.appendChild(row);
+  }
+}
+
+$("#tasks-btn").addEventListener("click", () => {
+  $("#tasks-backdrop").hidden = false;
+  refreshTasks();
+});
+$("#task-create").addEventListener("click", async () => {
+  const type = $("#task-type").value;
+  const schedule = { type };
+  if (type === "daily") schedule.time = $("#task-time").value;
+  if (type === "weekly") { schedule.time = $("#task-time").value; schedule.weekday = Number($("#task-weekday").value); }
+  if (type === "interval") schedule.minutes = Number($("#task-minutes").value);
+  if (type === "once") schedule.at = new Date($("#task-once").value).toISOString();
+  const res = await fetch("/api/tasks", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: $("#task-prompt").value, schedule }),
+  }).then((r) => r.json());
+  if (res.error) return alert(res.error);
+  $("#task-prompt").value = "";
+  refreshTasks();
+  loadConversations();
+});
+
+/* ---------------- MCP connectors ---------------- */
+
+function mcpRow({ title, subtitle, action }) {
+  const row = document.createElement("div");
+  row.className = "mcp-row";
+  const grow = document.createElement("div");
+  grow.className = "grow";
+  grow.innerHTML = `<div></div><div class="meta"></div>`;
+  grow.children[0].textContent = title;
+  grow.children[1].textContent = subtitle;
+  row.appendChild(grow);
+  if (action) row.appendChild(action);
+  return row;
+}
+
+async function refreshMcp() {
+  $("#mcp-installed").innerHTML = '<div class="mcp-note">Loading…</div>';
+  const data = await fetch("/api/mcp").then((r) => r.json());
+  if (data.error) {
+    $("#mcp-installed").innerHTML = "";
+    $("#mcp-installed").appendChild(Object.assign(document.createElement("div"), { className: "mcp-note", textContent: "Error: " + data.error }));
+    return;
+  }
+  const inst = $("#mcp-installed");
+  inst.innerHTML = data.servers.length ? "" : '<div class="mcp-note">No MCP servers configured.</div>';
+  for (const s of data.servers) {
+    const un = document.createElement("button");
+    un.className = "mini-btn danger";
+    un.textContent = "Uninstall";
+    un.addEventListener("click", async () => {
+      if (!confirm(`Remove MCP server "${s.name}" from Codex? This affects all Codex sessions, not just this app.`)) return;
+      const res = await fetch(`/api/mcp/${s.name}`, { method: "DELETE" }).then((r) => r.json());
+      if (res.error) alert(res.error);
+      refreshMcp();
+    });
+    inst.appendChild(mcpRow({
+      title: s.name + (s.appInstalled ? "  ·  added via app" : ""),
+      subtitle: [s.command, ...(s.args || [])].join(" ").slice(0, 90),
+      action: un,
+    }));
+  }
+  const cat = $("#mcp-catalog");
+  cat.innerHTML = "";
+  for (const c of data.catalog) {
+    let action;
+    if (c.installed) {
+      action = Object.assign(document.createElement("span"), { className: "meta", textContent: "Installed ✓" });
+    } else if (!c.available) {
+      action = Object.assign(document.createElement("span"), { className: "meta", textContent: `needs ${c.needs}` });
+    } else {
+      action = document.createElement("button");
+      action.className = "mini-btn";
+      action.textContent = "Install";
+      action.addEventListener("click", async () => {
+        action.textContent = "Installing…";
+        const res = await fetch("/api/mcp/install", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: c.id, command: c.command, args: c.args }),
+        }).then((r) => r.json());
+        if (res.error) alert(res.error);
+        refreshMcp();
+      });
+    }
+    cat.appendChild(mcpRow({ title: c.title, subtitle: c.description, action }));
+  }
+}
+
+$("#mcp-btn").addEventListener("click", () => {
+  $("#mcp-backdrop").hidden = false;
+  refreshMcp();
+});
+$("#mcp-add").addEventListener("click", async () => {
+  const name = $("#mcp-name").value.trim();
+  const tokens = $("#mcp-cmd").value.trim().split(/\s+/).filter(Boolean);
+  const env = {};
+  while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[tokens.length - 1])) {
+    const [k, ...v] = tokens.pop().split("=");
+    env[k] = v.join("=");
+  }
+  if (!name || !tokens.length) return alert("Name and command are required.");
+  const res = await fetch("/api/mcp/install", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, command: tokens[0], args: tokens.slice(1), env }),
+  }).then((r) => r.json());
+  if (res.error) return alert(res.error);
+  $("#mcp-name").value = "";
+  $("#mcp-cmd").value = "";
+  refreshMcp();
+});
+
+// approval card rendered when the agent proposes an MCP install in chat
+function buildMcpInstallCard(jsonText) {
+  let spec;
+  try {
+    spec = JSON.parse(jsonText.trim());
+  } catch {
+    return null;
+  }
+  if (!spec?.name || (!spec.command && !spec.url)) return null;
+  const card = document.createElement("div");
+  card.className = "mcp-card";
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = `🧩 Connector proposal: ${spec.name}`;
+  const reason = document.createElement("div");
+  reason.textContent = spec.reason || "";
+  const cmd = document.createElement("div");
+  cmd.className = "cmd";
+  cmd.textContent = spec.url ? spec.url : [spec.command, ...(spec.args || [])].join(" ");
+  card.append(title, reason, cmd);
+  const envInputs = {};
+  for (const [k, v] of Object.entries(spec.env || {})) {
+    const rowEl = document.createElement("div");
+    rowEl.className = "env-row";
+    const label = document.createElement("code");
+    label.textContent = k;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = v || "value…";
+    input.value = v || "";
+    envInputs[k] = input;
+    rowEl.append(label, input);
+    card.appendChild(rowEl);
+  }
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const approve = document.createElement("button");
+  approve.className = "primary";
+  approve.textContent = "Approve & install";
+  const status = document.createElement("div");
+  status.className = "status";
+  approve.addEventListener("click", async () => {
+    approve.disabled = true;
+    status.textContent = "Installing…";
+    const env = {};
+    for (const [k, input] of Object.entries(envInputs)) if (input.value.trim()) env[k] = input.value.trim();
+    const res = await fetch("/api/mcp/install", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: spec.name, command: spec.command, args: spec.args || [], env, url: spec.url }),
+    }).then((r) => r.json());
+    status.textContent = res.error ? "Failed: " + res.error : `Installed ✓ — "${spec.name}" is now available to the agent in new messages.`;
+    if (res.error) approve.disabled = false;
+  });
+  actions.appendChild(approve);
+  card.append(actions, status);
+  return card;
+}
+
+/* ---------------- generic modal close ---------------- */
+
+document.querySelectorAll(".modal-x[data-close]").forEach((b) =>
+  b.addEventListener("click", () => (document.getElementById(b.dataset.close).hidden = true)));
+document.querySelectorAll(".backdrop").forEach((bd) =>
+  bd.addEventListener("click", (e) => {
+    if (e.target === bd) bd.hidden = true;
+  }));
+
 /* ---------------- misc ---------------- */
 
 $("#new-chat-btn").addEventListener("click", newChat);
@@ -600,3 +961,5 @@ searchInput.addEventListener("input", renderConvList);
 newChat();
 loadConversations();
 loadModelSettings();
+loadProjects();
+updateModeUI();
