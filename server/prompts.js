@@ -22,6 +22,25 @@ For THIS message, run an iterative depth-first investigation before answering:
   return "";
 }
 
+// Marker carried in the weekly "memory dreaming" task prompt so the UI can find
+// (and avoid duplicating) that task.
+export const MEMORY_TASK_MARKER = "[memory-optimize]";
+
+// One-off turn that rewrites memory.md in place — run on demand from Settings,
+// and by the weekly scheduled task, which reuses this exact prompt.
+export function memoryOptimizePrompt() {
+  return `${MEMORY_TASK_MARKER} Reorganize the user's long-term memory.
+
+Rewrite memory.md in your workspace root, in place, so it stays useful as it grows:
+- Merge duplicate and near-duplicate bullets into one, keeping the most specific wording.
+- Group related facts together; collapse repeated specifics into a single durable statement.
+- Prune entries that are stale, superseded, trivial, or one-off chatter.
+- Never invent facts, and never drop a durable one (names, relationships, preferences, ongoing projects).
+- Keep the existing format — short dated bullets like "- 2026-05-01: …". When merging, keep the earliest date.
+
+Touch no other file. Reply with ONE line summarizing what changed, e.g. "Merged 6 duplicates, dropped 2 stale entries — 18 bullets down to 11."`;
+}
+
 // Injected once per Codex thread (first turn of each conversation).
 export function buildPreamble(projectId = null) {
   const settings = readSettings();
