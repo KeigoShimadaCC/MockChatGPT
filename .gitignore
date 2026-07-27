@@ -5,3 +5,4 @@ workspace/generated/
 workspace/memory.md
 .DS_Store
 *.log
+.factory/
