@@ -37,7 +37,9 @@ MockChatGPT ships a composer-level mode picker (the Grok-style dial) with per-tu
 - **Research: Wide** — breadth-first: plan 6–10 angles silently, ≥8 distinct queries, 15+ sources, structured report with a conflicting-information section and inline citation on every claim. (First live run: 10 searches, 48 citations, 15.5k-char report.)
 - **Research: Deep** — depth-first: plan written to `research_notes.md` (the scratchpad pattern), ≥3 search→read→gap-analysis rounds where later rounds chase specifics surfaced earlier, report with an explicit "what remains uncertain" section.
 
-Deliberate simplifications vs. the big players: no parallel subagents (Codex SDK runs one agent per thread; the wide sweep is sequential batching), no post-hoc citation agent (inline citation discipline is prompted instead), and no editable-plan UI yet (a natural next step: emit the plan, pause for user edit, then continue).
+Both modes are **plan-first**, the Gemini pattern: the first turn only restates the question and emits its plan as a fenced `research-plan` JSON block, which the UI renders as a card of editable items. "Start research" sends a follow-up turn in mode `wide-exec`/`deep-exec` carrying the approved items, and the execution protocol above runs prefixed with "The user approved this plan — follow it". A "Skip plan approval" checkbox in the mode menu (persisted in localStorage) restores the original one-shot behaviour.
+
+Deliberate simplifications vs. the big players: no parallel subagents (Codex SDK runs one agent per thread; the wide sweep is sequential batching) and no post-hoc citation agent (inline citation discipline is prompted instead).
 
 ## Sources
 

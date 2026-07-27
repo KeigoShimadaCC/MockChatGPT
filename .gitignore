@@ -7,5 +7,8 @@ workspace/memory.md
 workspace/.playwright-mcp/
 workspace/.playwright-cli/
 workspace/output/
+workspace/skills/*.md
+!workspace/skills/INDEX.md
 .DS_Store
 *.log
+.factory/

@@ -21,10 +21,11 @@ import {
   updateProject,
   deleteProject,
 } from "./store.js";
-import { buildPreamble, researchProtocol } from "./prompts.js";
+import { buildPreamble, researchProtocol, memoryOptimizePrompt, MEMORY_TASK_MARKER } from "./prompts.js";
 import { getThread, runTurn } from "./codexClient.js";
 import { listServers, installServer, removeServer } from "./mcp.js";
 import { listTasks, createTask, updateTask, deleteTask, runTask, startScheduler } from "./scheduler.js";
+import { listSkills, readSkill, writeSkill, deleteSkill, ensureIndex } from "./skills.js";
 
 const app = express();
 const PORT = process.env.PORT || 3939;
@@ -122,6 +123,33 @@ app.delete("/api/mcp/:name", async (req, res) => {
   }
 });
 
+// ---------- skills (agent-authored playbooks) ----------
+app.get("/api/skills", (req, res) => res.json(listSkills()));
+app.get("/api/skills/:slug", (req, res) => {
+  try {
+    const content = readSkill(req.params.slug);
+    if (content === null) return res.status(404).json({ error: "not found" });
+    res.json({ slug: req.params.slug, content });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.put("/api/skills/:slug", (req, res) => {
+  try {
+    res.json(writeSkill(req.params.slug, req.body?.content));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.delete("/api/skills/:slug", (req, res) => {
+  try {
+    deleteSkill(req.params.slug);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // ---------- conversations ----------
 app.get("/api/conversations", (req, res) => res.json(listConversations()));
 app.post("/api/conversations", (req, res) => res.json(createConversation(req.body?.projectId || null)));
@@ -184,6 +212,23 @@ app.put("/api/memory", (req, res) => {
   writeMemory(String(req.body.memory ?? ""));
   res.json({ ok: true });
 });
+// "Memory dreaming": a one-off Codex turn on a fresh thread that rewrites
+// memory.md in place. GET hands the UI the same prompt + marker so it can build
+// the weekly version of this as a scheduled task.
+app.get("/api/memory/optimize", (req, res) =>
+  res.json({ marker: MEMORY_TASK_MARKER, prompt: memoryOptimizePrompt() }));
+app.post("/api/memory/optimize", async (req, res) => {
+  const before = readMemory();
+  if (!before.trim()) return res.json({ summary: "Nothing to optimize — memory is empty.", memory: before });
+  try {
+    const { finalText } = await runTurn(getThread(null), memoryOptimizePrompt(), () => {});
+    const summary = finalText.trim().split("\n").filter((l) => l.trim()).pop();
+    res.json({ summary: summary || "Memory rewritten.", memory: readMemory() });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
 app.get("/api/settings", (req, res) => res.json(readSettings()));
 app.put("/api/settings", (req, res) => {
   const cur = readSettings();
@@ -195,7 +240,7 @@ app.put("/api/settings", (req, res) => {
 app.post("/api/conversations/:id/messages", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ error: "not found" });
-  const { text = "", attachments = [], researchMode = "" } = req.body || {};
+  const { text = "", attachments = [], researchMode = "", approvedPlan = [] } = req.body || {};
   if (!text.trim() && attachments.length === 0) return res.status(400).json({ error: "empty message" });
 
   res.writeHead(200, {
@@ -224,7 +269,7 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   const isFirstTurn = !conv.threadId;
   let promptText = "";
   if (isFirstTurn) promptText += buildPreamble(conv.projectId) + "\n\n";
-  promptText += researchProtocol(researchMode);
+  promptText += researchProtocol(researchMode, approvedPlan);
   const nonImageFiles = attachments.filter((a) => !a.isImage);
   if (nonImageFiles.length) {
     promptText += `[The user attached files, available in your workspace: ${nonImageFiles
@@ -287,5 +332,6 @@ app.listen(PORT, () => {
   if (!fs.existsSync(path.join(WORKSPACE, "AGENTS.md"))) {
     console.warn("note: workspace/AGENTS.md missing");
   }
+  ensureIndex();
   startScheduler();
 });
