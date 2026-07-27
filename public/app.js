@@ -22,7 +22,10 @@ let streamAbort = null;
 
 marked.setOptions({ breaks: true, gfm: true });
 
-function renderMarkdown(md) {
+// `opts.planLive` is false for research-plan blocks in older messages — their
+// card renders read-only instead of offering a Start button that would run
+// research on top of a conversation that has already moved on.
+function renderMarkdown(md, opts = {}) {
   const html = DOMPurify.sanitize(marked.parse(md || ""));
   const tpl = document.createElement("div");
   tpl.innerHTML = html;
@@ -32,6 +35,13 @@ function renderMarkdown(md) {
     const lang = (code.className.match(/language-([\w+-]+)/) || [])[1] || "";
     if (lang === "mcp-install") {
       const card = buildMcpInstallCard(code.textContent);
+      if (card) {
+        pre.replaceWith(card);
+        return;
+      }
+    }
+    if (lang === "research-plan") {
+      const card = buildResearchPlanCard(code.textContent, opts.planLive !== false);
       if (card) {
         pre.replaceWith(card);
         return;
@@ -292,7 +302,7 @@ function renderConversation() {
   messagesEl.innerHTML = "";
   const msgs = currentConv?.messages || [];
   setEmptyState(msgs.length === 0);
-  for (const m of msgs) {
+  msgs.forEach((m, i) => {
     if (m.role === "user") addUserMessage(m.text, m.attachments || []);
     else {
       const msg = document.createElement("div");
@@ -306,11 +316,11 @@ function renderConversation() {
       }
       const content = document.createElement("div");
       content.className = "content";
-      content.appendChild(renderMarkdown(m.text));
+      content.appendChild(renderMarkdown(m.text, { planLive: i === msgs.length - 1 }));
       msg.appendChild(content);
       messagesEl.appendChild(msg);
     }
-  }
+  });
   scrollToBottom();
 }
 
@@ -338,6 +348,16 @@ async function sendMessage() {
   const text = promptInput.value.trim();
   if (!text && pendingAttachments.length === 0) return;
 
+  const attachments = pendingAttachments.slice();
+  pendingAttachments = [];
+  attachPreviews.innerHTML = "";
+  promptInput.value = "";
+  autogrow();
+  await streamTurn({ text, attachments, researchMode: modeForSend() });
+}
+
+// One chat turn: echo the user bubble, open an assistant shell, stream SSE.
+async function streamTurn({ text, attachments = [], researchMode = "", approvedPlan = [] }) {
   if (!currentConv) {
     currentConv = await fetch("/api/conversations", {
       method: "POST",
@@ -345,11 +365,6 @@ async function sendMessage() {
       body: JSON.stringify({ projectId: selectedProjectId }),
     }).then((r) => r.json());
   }
-  const attachments = pendingAttachments.slice();
-  pendingAttachments = [];
-  attachPreviews.innerHTML = "";
-  promptInput.value = "";
-  autogrow();
   setEmptyState(false);
   addUserMessage(text, attachments);
   const shell = addAssistantShell();
@@ -361,7 +376,7 @@ async function sendMessage() {
     const res = await fetch(`/api/conversations/${currentConv.id}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, attachments, researchMode: currentMode }),
+      body: JSON.stringify({ text, attachments, researchMode, approvedPlan }),
       signal: streamAbort.signal,
     });
     const reader = res.body.getReader();
@@ -608,6 +623,15 @@ document.addEventListener("click", () => (modelMenu.hidden = true));
 let currentMode = "";
 const modeMenu = $("#mode-menu");
 const modeBtn = $("#mode-btn");
+const skipPlanCheck = $("#skip-plan-check");
+const SKIP_PLAN_KEY = "mockchatgpt.skipPlanApproval";
+
+// Research modes plan first ("wide"), then run on approval ("wide-exec").
+// With plan approval skipped we jump straight to the exec protocol.
+function modeForSend() {
+  if (!currentMode) return "";
+  return skipPlanCheck.checked ? `${currentMode}-exec` : currentMode;
+}
 
 function updateModeUI() {
   const labels = { "": "Research", wide: "Research: Wide", deep: "Research: Deep" };
@@ -616,6 +640,10 @@ function updateModeUI() {
   modeMenu.querySelectorAll("[data-mode]").forEach((b) =>
     b.classList.toggle("selected", b.dataset.mode === currentMode));
 }
+
+skipPlanCheck.checked = localStorage.getItem(SKIP_PLAN_KEY) === "1";
+skipPlanCheck.addEventListener("change", () =>
+  localStorage.setItem(SKIP_PLAN_KEY, skipPlanCheck.checked ? "1" : "0"));
 modeBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   modeMenu.hidden = !modeMenu.hidden;
@@ -940,6 +968,112 @@ function buildMcpInstallCard(jsonText) {
   });
   actions.appendChild(approve);
   card.append(actions, status);
+  return card;
+}
+
+// Editable plan card rendered when the agent proposes a research plan in chat.
+// `live` is false for plans from older messages — those render read-only.
+function buildResearchPlanCard(jsonText, live) {
+  let spec;
+  try {
+    spec = JSON.parse(jsonText.trim());
+  } catch {
+    return null;
+  }
+  const mode = spec?.mode;
+  if ((mode !== "wide" && mode !== "deep") || !Array.isArray(spec.items) || !spec.items.length) return null;
+
+  const card = document.createElement("div");
+  card.className = "mcp-card plan-card";
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = `🔎 Research plan — ${mode === "wide" ? "Wide" : "Deep"}`;
+  const question = document.createElement("div");
+  question.textContent = spec.question || "";
+  const rows = document.createElement("div");
+  rows.className = "plan-rows";
+  const status = document.createElement("div");
+  status.className = "status";
+  card.append(title, question, rows);
+
+  const inputs = [];
+  const addRow = (value, focus) => {
+    const row = document.createElement("div");
+    row.className = "plan-row";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = String(value ?? "");
+    input.disabled = !live;
+    const remove = document.createElement("button");
+    remove.className = "plan-remove";
+    remove.textContent = "✕";
+    remove.title = "Remove this item";
+    remove.addEventListener("click", () => {
+      inputs.splice(inputs.indexOf(input), 1);
+      row.remove();
+    });
+    inputs.push(input);
+    row.appendChild(input);
+    if (live) row.appendChild(remove);
+    rows.appendChild(row);
+    if (focus) input.focus();
+  };
+  spec.items.forEach((item) => addRow(item, false));
+
+  if (Array.isArray(spec.queries) && spec.queries.length) {
+    const queries = document.createElement("div");
+    queries.className = "cmd";
+    queries.textContent = "Planned searches: " + spec.queries.join(" · ");
+    card.appendChild(queries);
+  }
+
+  if (!live) {
+    status.textContent = "Plan expired — the conversation has moved on. Pick a research mode again to plan afresh.";
+    card.appendChild(status);
+    return card;
+  }
+
+  const add = document.createElement("button");
+  add.className = "plan-add";
+  add.textContent = "+ Add item";
+  add.addEventListener("click", () => addRow("", true));
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const start = document.createElement("button");
+  start.className = "primary";
+  start.textContent = "Start research";
+  const cancel = document.createElement("button");
+  cancel.className = "plan-cancel";
+  cancel.textContent = "Cancel";
+
+  const freeze = (msg) => {
+    inputs.forEach((i) => (i.disabled = true));
+    card.querySelectorAll(".plan-remove").forEach((b) => b.remove());
+    add.remove();
+    actions.remove();
+    status.textContent = msg;
+  };
+  start.addEventListener("click", () => {
+    if (streaming) {
+      status.textContent = "Wait for the current turn to finish first.";
+      return;
+    }
+    const items = inputs.map((i) => i.value.trim()).filter(Boolean);
+    if (!items.length) {
+      status.textContent = "Add at least one item before starting.";
+      return;
+    }
+    freeze(`Plan approved ✓ — running ${items.length} ${mode === "wide" ? "angles" : "rounds"}.`);
+    streamTurn({
+      text: "Start the research using the approved plan.",
+      researchMode: `${mode}-exec`,
+      approvedPlan: items,
+    });
+  });
+  cancel.addEventListener("click", () => freeze("Plan cancelled — ask something else whenever you like."));
+
+  actions.append(start, cancel);
+  card.append(add, actions, status);
   return card;
 }
 
