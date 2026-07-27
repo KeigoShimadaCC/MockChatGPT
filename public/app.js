@@ -419,15 +419,48 @@ function setStreaming(on) {
 
 /* ---------------- attachments ---------------- */
 
-$("#attach-btn").addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", async () => {
-  if (!fileInput.files.length) return;
+async function uploadFiles(fileList) {
+  const files = [...fileList];
+  if (!files.length) return;
   const fd = new FormData();
-  for (const f of fileInput.files) fd.append("files", f);
-  fileInput.value = "";
+  for (const f of files) fd.append("files", f);
   const res = await fetch("/api/upload", { method: "POST", body: fd }).then((r) => r.json());
   pendingAttachments.push(...res.files);
   renderAttachPreviews();
+}
+
+$("#attach-btn").addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+  uploadFiles(fileInput.files);
+  fileInput.value = "";
+});
+
+// drag & drop anywhere in the main area
+const composerEl = $("#composer");
+["dragenter", "dragover"].forEach((evt) =>
+  document.addEventListener(evt, (e) => {
+    if (e.dataTransfer?.types?.includes("Files")) {
+      e.preventDefault();
+      composerEl.classList.add("dragover");
+    }
+  }));
+["dragleave", "drop"].forEach((evt) =>
+  document.addEventListener(evt, (e) => {
+    if (evt === "drop") e.preventDefault();
+    if (evt === "dragleave" && e.relatedTarget) return;
+    composerEl.classList.remove("dragover");
+  }));
+document.addEventListener("drop", (e) => {
+  if (e.dataTransfer?.files?.length) uploadFiles(e.dataTransfer.files);
+});
+
+// paste files/screenshots straight into the composer
+promptInput.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) {
+    e.preventDefault();
+    uploadFiles(files);
+  }
 });
 
 function renderAttachPreviews() {

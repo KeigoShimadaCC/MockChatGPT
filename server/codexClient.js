@@ -9,6 +9,7 @@ function threadOptions() {
     workingDirectory: WORKSPACE,
     skipGitRepoCheck: true,
     sandboxMode: "workspace-write",
+    networkAccessEnabled: true,
     webSearchEnabled: true,
   };
   if (settings.model?.trim()) opts.model = settings.model.trim();
