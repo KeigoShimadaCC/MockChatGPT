@@ -149,7 +149,7 @@ function addUserMessage(text, attachments = []) {
   const msg = document.createElement("div");
   msg.className = "msg user";
   const box = document.createElement("div");
-  box.style.maxWidth = "100%";
+  box.className = "msg-box";
   if (attachments.length) {
     const chips = document.createElement("div");
     chips.className = "attachment-chips";
