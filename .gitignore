@@ -3,5 +3,8 @@ data/
 workspace/uploads/
 workspace/generated/
 workspace/memory.md
+workspace/skills/*.md
+!workspace/skills/INDEX.md
 .DS_Store
 *.log
+.factory/

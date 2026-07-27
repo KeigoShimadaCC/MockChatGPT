@@ -13,8 +13,9 @@ export const MEMORY_FILE = path.join(WORKSPACE, "memory.md");
 export const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 export const PROJECTS_FILE = path.join(DATA_DIR, "projects.json");
 export const PROJECT_FILES_DIR = path.join(WORKSPACE, "projects");
+export const SKILLS_DIR = path.join(WORKSPACE, "skills");
 
-for (const dir of [DATA_DIR, CONV_DIR, WORKSPACE, UPLOADS_DIR, GENERATED_DIR, PROJECT_FILES_DIR]) {
+for (const dir of [DATA_DIR, CONV_DIR, WORKSPACE, UPLOADS_DIR, GENERATED_DIR, PROJECT_FILES_DIR, SKILLS_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
