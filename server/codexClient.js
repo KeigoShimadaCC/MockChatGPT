@@ -23,16 +23,19 @@ export function getThread(threadId) {
 }
 
 // Runs one turn and forwards simplified events to `emit(event)`.
-// Returns { threadId, finalText }.
-export async function runTurn(thread, input, emit) {
-  const { events } = await thread.runStreamed(input);
+// `signal` (optional) cancels the turn: the SDK hands it to the spawn() that
+// starts `codex exec`, so aborting kills the child process, not just this loop.
+// Returns { threadId, finalText, aborted }.
+export async function runTurn(thread, input, emit, signal) {
+  const { events } = await thread.runStreamed(input, { signal });
   // Codex can emit several agent_message items per turn (progress notes + final
   // answer); accumulate them so earlier ones aren't overwritten.
   const parts = [];
   let partial = "";
   let finalText = "";
+  const abort = { aborted: false };
 
-  for await (const event of events) {
+  for await (const event of untilAborted(events, abort, signal)) {
     switch (event.type) {
       case "item.started":
       case "item.updated":
@@ -135,7 +138,20 @@ export async function runTurn(thread, input, emit) {
     }
   }
 
-  return { threadId: thread.id, finalText };
+  return { threadId: thread.id, finalText, aborted: abort.aborted };
+}
+
+// Ends iteration quietly when the turn is aborted instead of throwing, so the
+// caller can still keep whatever the agent had produced before the kill.
+// Killing the child races the AbortError, so the stream may instead surface a
+// plain "exited with signal SIGTERM" — `signal.aborted` is the reliable tell.
+async function* untilAborted(events, state, signal) {
+  try {
+    yield* events;
+  } catch (err) {
+    if (!signal?.aborted && err?.name !== "AbortError" && err?.code !== "ABORT_ERR") throw err;
+    state.aborted = true;
+  }
 }
 
 function truncate(s, n) {

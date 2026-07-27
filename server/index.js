@@ -192,11 +192,52 @@ app.put("/api/settings", (req, res) => {
 });
 
 // ---------- chat (SSE) ----------
+
+// In-flight codex turns keyed by conversation id, so /stop can cancel one.
+const activeRuns = new Map();
+
+const REGENERATE_PROMPT =
+  "Your previous answer wasn't quite right — answer my previous message again, better.";
+const revisePrompt = (text) =>
+  `I'm revising my previous message to: ${text}\n\nPlease answer the revised version.`;
+
+// Kills the codex child process running this conversation's turn. The turn's
+// own request then saves the partial answer and closes its SSE stream.
+app.post("/api/conversations/:id/stop", (req, res) => {
+  const run = activeRuns.get(req.params.id);
+  if (!run) return res.status(404).json({ error: "no active run" });
+  run.stopped = true;
+  run.controller.abort();
+  console.log(`[stop] aborted turn for conversation ${req.params.id}`);
+  res.json({ ok: true, stopped: true });
+});
+
 app.post("/api/conversations/:id/messages", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ error: "not found" });
-  const { text = "", attachments = [], researchMode = "" } = req.body || {};
-  if (!text.trim() && attachments.length === 0) return res.status(400).json({ error: "empty message" });
+  if (activeRuns.has(conv.id)) return res.status(409).json({ error: "a turn is already running" });
+  const { text = "", attachments = [], researchMode = "", replaceLast = "" } = req.body || {};
+
+  // replaceLast rewrites the tail of the transcript instead of appending to it:
+  // "assistant" regenerates the last answer, "both" resends an edited question.
+  // Codex threads are stateful and can't be forked, so the thread just gets an
+  // extra instruction turn while the stored transcript keeps only one answer.
+  const last = conv.messages.at(-1);
+  const prev = conv.messages.at(-2);
+  if (replaceLast && replaceLast !== "assistant" && replaceLast !== "both") {
+    return res.status(400).json({ error: "replaceLast must be 'assistant' or 'both'" });
+  }
+  if (replaceLast && last?.role !== "assistant") {
+    return res.status(400).json({ error: "nothing to replace" });
+  }
+  if (replaceLast === "both" && prev?.role !== "user") {
+    return res.status(400).json({ error: "no user message to revise" });
+  }
+  if (replaceLast === "assistant") {
+    if (text.trim()) return res.status(400).json({ error: "regenerate takes no text" });
+  } else if (!text.trim() && attachments.length === 0) {
+    return res.status(400).json({ error: "empty message" });
+  }
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -207,13 +248,21 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
   const heartbeat = setInterval(() => res.write(": ping\n\n"), 15000);
 
-  // record user message
-  conv.messages.push({
-    role: "user",
-    text,
-    attachments: attachments.map((a) => ({ name: a.name, url: a.url, isImage: a.isImage })),
-    ts: Date.now(),
-  });
+  // drop the messages being replaced, then record the user message
+  if (replaceLast) conv.messages.pop();
+  const replacedUser = replaceLast === "both" ? conv.messages.pop() : null;
+  if (replaceLast !== "assistant") {
+    conv.messages.push({
+      role: "user",
+      text,
+      // an edited question keeps its original attachments: the thread already
+      // saw those files, so they are for display only and aren't re-sent
+      attachments: replacedUser
+        ? replacedUser.attachments || []
+        : attachments.map((a) => ({ name: a.name, url: a.url, isImage: a.isImage })),
+      ts: Date.now(),
+    });
+  }
   if (conv.title === "New chat" && text.trim()) {
     conv.title = text.trim().replace(/\s+/g, " ").slice(0, 48) + (text.trim().length > 48 ? "…" : "");
     send({ type: "title", title: conv.title });
@@ -235,7 +284,8 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   if (imageFiles.length) {
     promptText += `[The user attached ${imageFiles.length} image(s), provided below]\n`;
   }
-  promptText += text;
+  promptText +=
+    replaceLast === "assistant" ? REGENERATE_PROMPT : replaceLast === "both" ? revisePrompt(text) : text;
 
   const input =
     imageFiles.length > 0
@@ -258,23 +308,30 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
     send(ev);
   };
 
+  const run = { controller: new AbortController(), stopped: false };
+  activeRuns.set(conv.id, run);
   try {
     const thread = getThread(conv.threadId);
-    const { threadId, finalText } = await runTurn(thread, input, sendAndRecord);
+    const { threadId, finalText, aborted } = await runTurn(thread, input, sendAndRecord, run.controller.signal);
+    const stopped = aborted || run.stopped;
+    const answer = stopped ? (finalText ? `${finalText}\n\n_(stopped)_` : "_(stopped)_") : finalText;
     conv.threadId = threadId || conv.threadId;
     conv.messages.push({
       role: "assistant",
-      text: finalText,
+      text: answer,
       activities,
       durationMs: Date.now() - startedAt,
+      ...(stopped ? { stopped: true } : {}),
       ts: Date.now(),
     });
     saveConversation(conv);
+    if (stopped) send({ type: "stopped", text: answer });
     send({ type: "done", threadId: conv.threadId });
   } catch (err) {
     console.error(err);
     send({ type: "error", message: String(err?.message || err) });
   } finally {
+    activeRuns.delete(conv.id);
     clearInterval(heartbeat);
     res.end();
   }

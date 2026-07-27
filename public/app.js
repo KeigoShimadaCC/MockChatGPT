@@ -19,6 +19,7 @@ let currentConv = null; // full conversation object
 let pendingAttachments = [];
 let streaming = false;
 let streamAbort = null;
+let streamConvId = null; // conversation whose turn is in flight (for /stop)
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -62,6 +63,7 @@ function renderMarkdown(md) {
 
 async function loadConversations() {
   conversations = await fetch("/api/conversations").then((r) => r.json());
+  detectTaskRuns();
   renderConvList();
 }
 
@@ -185,6 +187,7 @@ function addUserMessage(text, attachments = []) {
   msg.appendChild(box);
   messagesEl.appendChild(msg);
   scrollToBottom();
+  return msg;
 }
 
 function fmtDuration(ms) {
@@ -292,9 +295,20 @@ function renderConversation() {
   messagesEl.innerHTML = "";
   const msgs = currentConv?.messages || [];
   setEmptyState(msgs.length === 0);
-  for (const m of msgs) {
-    if (m.role === "user") addUserMessage(m.text, m.attachments || []);
-    else {
+  // the server can only rewrite a transcript ending in question → answer, so
+  // that is exactly when the regenerate/edit controls are offered
+  const editable = !streaming && msgs.at(-1)?.role === "assistant" && msgs.at(-2)?.role === "user";
+  msgs.forEach((m, i) => {
+    if (m.role === "user") {
+      const msg = addUserMessage(m.text, m.attachments || []);
+      if (editable && i === msgs.length - 2) {
+        const box = msg.querySelector(".msg-box");
+        const bubble = box.querySelector(".bubble");
+        if (bubble) {
+          addMessageActions(box, [["✏️", "Edit message", () => startEditing(box, bubble, m.text)]]);
+        }
+      }
+    } else {
       const msg = document.createElement("div");
       msg.className = "msg assistant";
       if (m.activities?.length) {
@@ -308,9 +322,12 @@ function renderConversation() {
       content.className = "content";
       content.appendChild(renderMarkdown(m.text));
       msg.appendChild(content);
+      if (editable && i === msgs.length - 1) {
+        addMessageActions(msg, [["⟳ Regenerate", "Try this answer again", regenerateLast]]);
+      }
       messagesEl.appendChild(msg);
     }
-  }
+  });
   scrollToBottom();
 }
 
@@ -332,11 +349,12 @@ function newChat() {
 
 async function sendMessage() {
   if (streaming) {
-    streamAbort?.abort();
+    stopTurn();
     return;
   }
   const text = promptInput.value.trim();
   if (!text && pendingAttachments.length === 0) return;
+  ensureNotifyPermission();
 
   if (!currentConv) {
     currentConv = await fetch("/api/conversations", {
@@ -352,18 +370,41 @@ async function sendMessage() {
   autogrow();
   setEmptyState(false);
   addUserMessage(text, attachments);
+  await streamTurn({ text, attachments });
+}
+
+// Cancels the codex turn server-side. The turn's own request saves whatever the
+// agent had written and closes the stream, so we don't abort the fetch here.
+async function stopTurn() {
+  if (!streamConvId) return;
+  try {
+    await fetch(`/api/conversations/${streamConvId}/stop`, { method: "POST" });
+  } catch {
+    streamAbort?.abort(); // server unreachable — at least detach the client
+  }
+}
+
+// Streams one turn into a fresh assistant shell. `replaceLast` ("assistant" to
+// regenerate, "both" to resend an edited question) is passed straight through.
+async function streamTurn({ text = "", attachments = [], replaceLast = "" }) {
+  const convId = currentConv.id;
+  streamConvId = convId;
+  document.querySelectorAll(".msg-actions").forEach((el) => el.remove());
   const shell = addAssistantShell();
   setStreaming(true);
 
   streamAbort = new AbortController();
-  let gotFinal = false;
+  const state = { final: false, saved: false };
   try {
-    const res = await fetch(`/api/conversations/${currentConv.id}/messages`, {
+    const res = await fetch(`/api/conversations/${convId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, attachments, researchMode: currentMode }),
+      body: JSON.stringify({ text, attachments, researchMode: currentMode, replaceLast }),
       signal: streamAbort.signal,
     });
+    if (!res.ok) {
+      throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -378,7 +419,7 @@ async function sendMessage() {
         if (!chunk.startsWith("data: ")) continue;
         let ev;
         try { ev = JSON.parse(chunk.slice(6)); } catch { continue; }
-        handleStreamEvent(ev, shell, () => (gotFinal = true));
+        handleStreamEvent(ev, shell, state);
       }
     }
   } catch (err) {
@@ -388,15 +429,27 @@ async function sendMessage() {
     }
   } finally {
     finalizeShell(shell);
-    if (!gotFinal && shell.content.childNodes.length === 0) {
+    if (!state.final && shell.content.childNodes.length === 0) {
       shell.content.appendChild(renderMarkdown("_(no response)_"));
     }
+    const reply = shell.content.textContent.trim();
     setStreaming(false);
-    loadConversations();
+    await loadConversations();
+    streamConvId = null;
+    // re-read the saved transcript so currentConv (and the regenerate/edit
+    // buttons, which act on its tail) match what the server actually stored
+    if (state.saved && currentConv?.id === convId) {
+      currentConv = await fetch(`/api/conversations/${convId}`).then((r) => r.json());
+      renderConversation();
+    }
+    if (state.saved && document.hidden) {
+      const title = conversations.find((c) => c.id === convId)?.title || "MockChatGPT";
+      notify(title, reply.slice(0, 140) || "Response ready", convId);
+    }
   }
 }
 
-function handleStreamEvent(ev, shell, markFinal) {
+function handleStreamEvent(ev, shell, state) {
   switch (ev.type) {
     case "title":
       loadConversations();
@@ -406,19 +459,94 @@ function handleStreamEvent(ev, shell, markFinal) {
       break;
     case "assistant_delta":
     case "assistant":
+    case "stopped":
       shell.content.innerHTML = "";
       shell.content.appendChild(renderMarkdown(ev.text));
-      if (ev.type === "assistant") markFinal();
+      if (ev.type !== "assistant_delta") state.final = true;
       scrollToBottom();
       break;
     case "error":
       shell.content.appendChild(renderMarkdown(`\n\n⚠️ ${ev.message}`));
       break;
     case "done":
-      markFinal();
+      state.final = true;
+      state.saved = true;
       finalizeShell(shell);
       break;
   }
+}
+
+/* ---------------- regenerate & edit ---------------- */
+
+async function regenerateLast() {
+  if (streaming || !currentConv) return;
+  if (currentConv.messages.at(-1)?.role !== "assistant") return;
+  messagesEl.lastElementChild?.remove(); // the answer the server is about to drop
+  await streamTurn({ replaceLast: "assistant" });
+}
+
+async function resendEdited(newText) {
+  if (streaming || !currentConv) return;
+  const msgs = currentConv.messages;
+  if (msgs.at(-1)?.role !== "assistant" || msgs.at(-2)?.role !== "user") return;
+  const attachments = msgs.at(-2).attachments || [];
+  messagesEl.lastElementChild?.remove(); // old answer
+  messagesEl.lastElementChild?.remove(); // old question
+  addUserMessage(newText, attachments);
+  await streamTurn({ text: newText, replaceLast: "both" });
+}
+
+function addMessageActions(parent, buttons) {
+  const row = document.createElement("div");
+  row.className = "msg-actions";
+  for (const [label, title, onClick] of buttons) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.title = title;
+    b.textContent = label;
+    b.addEventListener("click", onClick);
+    row.appendChild(b);
+  }
+  parent.appendChild(row);
+}
+
+// Swaps the user bubble for a textarea; resending replaces both stored messages.
+function startEditing(box, bubble, text) {
+  box.querySelector(".msg-actions")?.remove();
+  box.classList.add("editing");
+  bubble.remove();
+  const editor = document.createElement("div");
+  editor.className = "msg-editor";
+  const area = document.createElement("textarea");
+  area.rows = Math.min(10, text.split("\n").length + 1);
+  area.value = text;
+  const actions = document.createElement("div");
+  actions.className = "editor-actions";
+  const cancel = document.createElement("button");
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", renderConversation);
+  const send = document.createElement("button");
+  send.className = "primary";
+  send.textContent = "Send";
+  const submit = () => {
+    const next = area.value.trim();
+    if (!next || next === text) return cancel.click();
+    resendEdited(next);
+  };
+  send.addEventListener("click", submit);
+  area.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      submit();
+    } else if (e.key === "Escape") {
+      cancel.click();
+    }
+  });
+  actions.append(cancel, send);
+  editor.append(area, actions);
+  box.appendChild(editor);
+  area.focus();
+  area.setSelectionRange(area.value.length, area.value.length);
 }
 
 function setStreaming(on) {
@@ -951,6 +1079,57 @@ document.querySelectorAll(".backdrop").forEach((bd) =>
   bd.addEventListener("click", (e) => {
     if (e.target === bd) bd.hidden = true;
   }));
+
+/* ---------------- desktop notifications ---------------- */
+
+const TASK_PREFIX = "⏰";
+let notifyAsked = false;
+let taskStamps = null; // id → updatedAt for task chats; null until the first load
+
+// Asked on the first send rather than at load, so the prompt has context.
+function ensureNotifyPermission() {
+  if (notifyAsked || !("Notification" in window)) return;
+  notifyAsked = true;
+  if (Notification.permission === "default") Notification.requestPermission().catch(() => {});
+}
+
+function notify(title, body, convId) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  let n;
+  try {
+    n = new Notification(title, { body, tag: convId || "mockchatgpt" });
+  } catch {
+    return; // some browsers only allow notifications from a service worker
+  }
+  n.addEventListener("click", () => {
+    window.focus();
+    n.close();
+    if (convId) openConversation(convId);
+  });
+}
+
+// Scheduled runs land server-side with no stream attached, so they are spotted
+// by watching the updatedAt of "⏰" chats across conversation-list refreshes.
+function detectTaskRuns() {
+  const stamps = new Map();
+  for (const c of conversations) {
+    if (c.title.startsWith(TASK_PREFIX)) stamps.set(c.id, c.updatedAt);
+  }
+  if (taskStamps) {
+    for (const [id, updatedAt] of stamps) {
+      const prev = taskStamps.get(id);
+      if (prev !== undefined && updatedAt <= prev) continue;
+      if (id === streamConvId) continue; // our own turn, not a scheduled run
+      if (!document.hidden && currentConv?.id === id) continue; // already looking at it
+      notify("Scheduled task finished", conversations.find((c) => c.id === id).title, id);
+    }
+  }
+  taskStamps = stamps;
+}
+
+setInterval(() => {
+  if (document.hidden && !streaming) loadConversations();
+}, 60000);
 
 /* ---------------- misc ---------------- */
 
