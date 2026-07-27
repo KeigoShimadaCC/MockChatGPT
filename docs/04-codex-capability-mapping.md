@@ -10,20 +10,20 @@ Mapping the capability list from [01-chatbot-capabilities.md](01-chatbot-capabil
 | Vision / image understanding | ✅ native | `{ type: "local_image", path }` input | ✅ (upload → attach) |
 | File upload & document Q&A | ✅ native | files in workspace, agent reads via shell | ✅ |
 | Data analysis + charts | ✅ native | executes Python/matplotlib, saves chart files | ✅ (rendered from `generated/`) |
-| Image generation | 🟡 partial | built-in `image_gen` skill/tool when available; otherwise programmatic SVG/PIL | ✅ (both paths, via AGENTS.md) |
+| Image generation | 🟡 partial | built-in `image_gen` skill/tool when available; otherwise programmatic SVG/PIL | ✅ (both paths; HF Spaces MCP in the Connectors catalog as a third) |
 | Persistent memory | 🟡 DIY | no native memory; `memory.md` + AGENTS.md convention + preamble injection | ✅ |
 | Custom instructions | 🟡 DIY | prepend to first turn / AGENTS.md | ✅ |
 | Conversation persistence | ✅ native | `resumeThread(threadId)` survives restarts | ✅ |
 | Multi-step autonomous agent | ✅ native | it's the same agent as Codex CLI (plan/execute loops) | ✅ inherently |
 | Coding agent | ✅ native | that's literally Codex | ✅ |
-| MCP connectors | ✅ native | `~/.codex/config.toml` `mcp_servers` | ➖ configurable, none bundled |
-| Computer use / browser agent | 🟡 via MCP | Playwright MCP (see doc 03) | ➖ future |
-| Deep research mode | 🟡 approximable | web search + multi-step loop; no dedicated mode | ➖ (normal search works) |
+| MCP connectors | ✅ native | `codex mcp add/remove/list` | ✅ Connectors manager: catalog, custom installs, in-chat approval cards |
+| Computer use / browser agent | 🟡 via MCP | Playwright MCP (see doc 03) | ✅ agent browses; screenshots stream into the Thinking timeline |
+| Deep research mode | 🟡 approximable | prompt protocols + thread orchestration | ✅ three modes: Wide, Deep, Heavy (parallel sub-researcher threads); editable plan approval |
 | Canvas / artifacts | ❌ | would need custom UI surface | ❌ |
 | Voice mode | ❌ | no audio I/O in SDK | ❌ |
 | Video generation (Sora) | ❌ | nothing comparable; no free MCP of note | ❌ |
-| Scheduled tasks | 🟡 DIY | cron + `codex exec` / SDK script | ➖ future |
-| Projects/workspaces | 🟡 DIY | per-project workspace dirs + AGENTS.md | ➖ future |
+| Scheduled tasks | 🟡 DIY | server cron loop running Codex turns | ✅ Tasks UI + agent-proposed task cards |
+| Projects/workspaces | 🟡 DIY | preamble injection + per-project file dirs | ✅ Projects in sidebar (instructions + files) |
 
 ## Verdict
 

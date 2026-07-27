@@ -12,9 +12,9 @@ The goal: a chat app a ChatGPT user feels immediately at home in, backed by a ge
 | 🔎 Web search with cited sources | Codex built-in web search |
 | 🧮 Code interpreter / data analysis | Codex executes code in a sandboxed workspace |
 | 🖼️ Image understanding (vision) | Upload images → Codex `local_image` input |
-| 🎨 Image generation | Agent programmatically renders SVG / matplotlib / PIL into `workspace/generated/` and embeds it in the reply |
+| 🎨 Image generation | Codex's built-in `image_gen` tool when available; otherwise programmatic SVG / matplotlib / PIL into `workspace/generated/` |
 | 📎 File uploads (PDF, CSV, …) | Files land in the agent workspace; the agent reads them |
-| 🧠 Persistent memory across chats | `workspace/memory.md`, auto-updated by the agent, editable in Settings |
+| 🧠 Persistent memory across chats | `workspace/memory.md`, auto-updated by the agent, editable in Settings; "memory dreaming" dedupes/prunes it on demand or weekly |
 | ⚙️ Custom instructions & nickname | Settings modal, injected per conversation |
 | 🗂️ Conversation history | Sidebar with search, rename, delete, date grouping |
 | 🎛️ Model & reasoning picker | Top-bar dropdown: GPT-5.6 tiers or custom model id, effort minimal→xhigh |
@@ -23,6 +23,10 @@ The goal: a chat app a ChatGPT user feels immediately at home in, backed by a ge
 | 📁 Projects | Group chats with per-project instructions and files |
 | 🧩 Connectors (MCP) | Catalog + custom install/uninstall backed by `codex mcp`; or just ask in chat — the agent proposes, you approve |
 | 🧩 Live "Thinking" timeline | Every agentic action (reasoning, commands + output, searches, file edits) streams into an expandable per-message panel, saved and replayable |
+| 🌐 Live browser view | When the agent browses (Playwright MCP), the timeline shows "Browsing: …" rows with inline screenshots |
+| ⏹️ Real stop / regenerate / edit | Stop actually kills the Codex turn server-side; regenerate and edit-and-resend rewrite the stored transcript |
+| 🔔 Desktop notifications | Fired when a turn finishes in a hidden tab or a scheduled task lands; click to open the chat |
+| 📚 Self-authored skills | The agent writes its own reusable playbooks in `workspace/skills/` and consults them; view/edit them from the sidebar |
 
 ## Quick start
 
@@ -61,7 +65,7 @@ data/        ← conversations + settings (JSON)
 
 ## Known gaps vs. real ChatGPT
 
-- No diffusion-model image generation (programmatic SVG/chart images instead — see docs/03 for MCP options like Pollinations/ComfyUI)
-- No voice mode, no video generation (Sora)
+- Diffusion-grade image generation only when Codex's built-in `image_gen` tool fires (programmatic SVG/chart fallback otherwise; the Connectors catalog offers HF Spaces/FLUX as an alternative)
+- No voice mode, no video generation
 - No canvas, no multi-user sharing
 - Single user, local only — do not expose the port publicly (the agent can execute code)

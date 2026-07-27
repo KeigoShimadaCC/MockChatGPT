@@ -26,8 +26,12 @@ curl -s -N -X POST localhost:3939/api/conversations/$CONV/messages \
 
 - `server/index.js` — Express routes + SSE chat endpoint; also serves vendored client libs straight out of `node_modules` (marked, dompurify, highlight.js)
 - `server/codexClient.js` — Codex thread options + event → SSE mapping
-- `server/prompts.js` — first-turn preamble (memory, nickname, custom instructions)
-- `server/store.js` — JSON persistence (`data/`), workspace paths
+- `server/prompts.js` — first-turn preamble (memory, nickname, custom instructions, project), research-mode protocols (wide/deep plan+exec, heavy planning), memory-optimize prompt
+- `server/heavyResearch.js` — Heavy mode orchestrator: subquestion parse → parallel worker threads → synthesis
+- `server/scheduler.js` — scheduled-tasks store + 30s cron loop (each run = a Codex turn into a "⏰" conversation)
+- `server/mcp.js` — MCP connector manager shelling out to `codex mcp add/remove/list`; curated catalog
+- `server/skills.js` — CRUD for the agent's self-authored playbooks in `workspace/skills/`
+- `server/store.js` — JSON persistence (`data/`), projects, workspace paths
 - `public/` — single-page vanilla JS UI (`index.html`, `app.js`, `app.css`); no framework, keep it that way
 - `workspace/` — the embedded Codex agent's sandbox (uploads/, generated/, memory.md)
 - `data/` — conversations + settings JSON (gitignored)
