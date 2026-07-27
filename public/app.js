@@ -1023,6 +1023,75 @@ function buildMcpInstallCard(jsonText) {
   return card;
 }
 
+/* ---------------- skills ---------------- */
+
+let editingSkill = null;
+
+async function refreshSkills() {
+  const skills = await fetch("/api/skills").then((r) => r.json());
+  const list = $("#skill-list");
+  list.innerHTML = skills.length
+    ? ""
+    : '<div class="mcp-note">No skills yet. MockChatGPT teaches itself reusable playbooks as you work — they\'ll appear here. You can edit or delete them.</div>';
+  for (const s of skills) {
+    const row = document.createElement("div");
+    row.className = "skill-row";
+    const grow = document.createElement("div");
+    grow.className = "grow";
+    grow.innerHTML = `<div></div><div class="meta"></div>`;
+    grow.children[0].textContent = s.title || s.slug;
+    grow.children[1].textContent = s.description || s.slug;
+    row.appendChild(grow);
+    const mk = (label, fn, danger) => {
+      const b = document.createElement("button");
+      b.className = "mini-btn" + (danger ? " danger" : "");
+      b.textContent = label;
+      b.addEventListener("click", fn);
+      row.appendChild(b);
+    };
+    mk("View / edit", () => openSkill(s.slug));
+    mk("Delete", async () => {
+      if (!confirm(`Delete the skill "${s.slug}"? MockChatGPT will lose this playbook.`)) return;
+      await fetch(`/api/skills/${s.slug}`, { method: "DELETE" });
+      if (editingSkill === s.slug) closeSkillEditor();
+      refreshSkills();
+    }, true);
+    list.appendChild(row);
+  }
+}
+
+async function openSkill(slug) {
+  const data = await fetch(`/api/skills/${slug}`).then((r) => r.json());
+  if (data.error) return alert(data.error);
+  editingSkill = slug;
+  $("#skill-editor-title").textContent = `${slug}.md`;
+  $("#skill-content").value = data.content;
+  $("#skill-status").textContent = "";
+  $("#skill-editor").hidden = false;
+}
+
+function closeSkillEditor() {
+  editingSkill = null;
+  $("#skill-editor").hidden = true;
+}
+
+$("#skills-btn").addEventListener("click", () => {
+  $("#skills-backdrop").hidden = false;
+  closeSkillEditor();
+  refreshSkills();
+});
+$("#skill-save").addEventListener("click", async () => {
+  if (!editingSkill) return;
+  const res = await fetch(`/api/skills/${editingSkill}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: $("#skill-content").value }),
+  }).then((r) => r.json());
+  if (res.error) return alert(res.error);
+  $("#skill-status").textContent = "Saved ✓";
+  refreshSkills();
+});
+$("#skill-cancel").addEventListener("click", closeSkillEditor);
+
 // approval card rendered when the agent proposes a scheduled task in chat
 function buildTaskCreateCard(jsonText) {
   let spec;
