@@ -18,7 +18,7 @@ The goal: a chat app a ChatGPT user feels immediately at home in, backed by a ge
 | ⚙️ Custom instructions & nickname | Settings modal, injected per conversation |
 | 🗂️ Conversation history | Sidebar with search, rename, delete, date grouping |
 | 🎛️ Model & reasoning picker | Top-bar dropdown: GPT-5.6 tiers or custom model id, effort minimal→xhigh |
-| 🔬 Deep research modes | Composer picker: **Wide** (broad multi-angle sweep, 15+ sources) or **Deep** (iterative rounds with a notes scratchpad); see docs/05 |
+| 🔬 Deep research modes | Composer picker: **Wide** (broad multi-angle sweep, 15+ sources), **Deep** (iterative rounds with a notes scratchpad), or **Heavy** (orchestrator plans → 3–4 sub-researchers run in parallel on their own threads → one synthesized cited report); see docs/05 |
 | ⏰ Scheduled tasks | Daily/weekly/interval/once schedules; each run is a real agent turn logged to a "⏰" conversation |
 | 📁 Projects | Group chats with per-project instructions and files |
 | 🧩 Connectors (MCP) | Catalog + custom install/uninstall backed by `codex mcp`; or just ask in chat — the agent proposes, you approve |

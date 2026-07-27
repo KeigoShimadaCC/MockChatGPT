@@ -838,11 +838,12 @@ const SKIP_PLAN_KEY = "mockchatgpt.skipPlanApproval";
 // With plan approval skipped we jump straight to the exec protocol.
 function modeForSend() {
   if (!currentMode) return "";
+  if (currentMode === "heavy") return "heavy"; // heavy runs its own plan phase
   return skipPlanCheck.checked ? `${currentMode}-exec` : currentMode;
 }
 
 function updateModeUI() {
-  const labels = { "": "Research", wide: "Research: Wide", deep: "Research: Deep" };
+  const labels = { "": "Research", wide: "Research: Wide", deep: "Research: Deep", heavy: "Research: Heavy" };
   $("#mode-label").textContent = labels[currentMode];
   modeBtn.classList.toggle("active", !!currentMode);
   modeMenu.querySelectorAll("[data-mode]").forEach((b) =>

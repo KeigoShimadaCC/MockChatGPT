@@ -23,6 +23,7 @@ import {
 } from "./store.js";
 import { buildPreamble, researchProtocol, memoryOptimizePrompt, MEMORY_TASK_MARKER } from "./prompts.js";
 import { getThread, runTurn } from "./codexClient.js";
+import { runHeavyResearch } from "./heavyResearch.js";
 import { listServers, installServer, removeServer } from "./mcp.js";
 import { listTasks, createTask, updateTask, deleteTask, runTask, startScheduler } from "./scheduler.js";
 import { listSkills, readSkill, writeSkill, deleteSkill, ensureIndex } from "./skills.js";
@@ -359,9 +360,14 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   activeRuns.set(conv.id, run);
   try {
     const thread = getThread(conv.threadId);
-    const { threadId, finalText, aborted } = await runTurn(thread, input, sendAndRecord, run.controller.signal);
+    const { threadId, finalText, aborted } =
+      researchMode === "heavy"
+        ? await runHeavyResearch(thread, input, sendAndRecord, text)
+        : await runTurn(thread, input, sendAndRecord, run.controller.signal);
     const stopped = aborted || run.stopped;
-    const answer = stopped ? (finalText ? `${finalText}\n\n_(stopped)_` : "_(stopped)_") : finalText;
+    const answer = stopped ? (finalText ? `${finalText}
+
+_(stopped)_` : "_(stopped)_") : finalText;
     conv.threadId = threadId || conv.threadId;
     conv.messages.push({
       role: "assistant",

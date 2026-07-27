@@ -18,6 +18,24 @@ For THIS message, run an iterative depth-first investigation before answering:
 </research_mode>\n\n`,
 };
 
+// Heavy mode's lead-planning turn; worker & synthesis prompts live in heavyResearch.js.
+const HEAVY_PLANNING = `<research_mode name="Deep research — Heavy">
+This message kicks off a multi-agent research run and you are the LEAD researcher. For THIS turn do NOT answer the question and do NOT search the web — only plan.
+
+Decompose the user's question into 3–4 sub-questions that can each be researched INDEPENDENTLY and in parallel:
+- Each must be self-contained: a researcher who sees only that one sentence, with no other context, must know exactly what to look for. Spell out the subject, the timeframe and any names instead of writing "it" or "the above".
+- They must not overlap, and together they must cover what an excellent answer needs (the competing options, the dimensions worth comparing, counter-evidence, recency).
+- Phrase each as a specific researchable question, not a topic label.
+
+Write one or two sentences on how you are splitting the question, then output the list as a fenced block exactly like this — a JSON array of strings, nothing else inside the fence:
+
+\`\`\`subquestions
+["first sub-question", "second sub-question", "third sub-question"]
+\`\`\`
+
+Stop after the fenced block. Sub-researchers will be dispatched on your plan, and you will be asked to write the report once they report back.
+</research_mode>\n\n`;
+
 const PLAN_UNIT = {
   wide: {
     item: "angle",
@@ -47,6 +65,7 @@ Do NOT search the web, fetch pages, run commands or write files on this turn —
 // Per-turn protocol prepended when the user picks a research mode.
 // `mode` is "wide"/"deep" (plan first) or "wide-exec"/"deep-exec" (run it).
 export function researchProtocol(mode, approvedPlan = []) {
+  if (mode === "heavy") return HEAVY_PLANNING;
   const base = String(mode || "").replace(/-exec$/, "");
   if (!EXECUTION[base]) return "";
   if (base === mode) return planningProtocol(base);
