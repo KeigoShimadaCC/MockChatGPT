@@ -7,3 +7,4 @@ workspace/skills/*.md
 !workspace/skills/INDEX.md
 .DS_Store
 *.log
+.factory/

@@ -21,7 +21,7 @@ import {
   updateProject,
   deleteProject,
 } from "./store.js";
-import { buildPreamble, researchProtocol } from "./prompts.js";
+import { buildPreamble, researchProtocol, memoryOptimizePrompt, MEMORY_TASK_MARKER } from "./prompts.js";
 import { getThread, runTurn } from "./codexClient.js";
 import { listServers, installServer, removeServer } from "./mcp.js";
 import { listTasks, createTask, updateTask, deleteTask, runTask, startScheduler } from "./scheduler.js";
@@ -211,6 +211,23 @@ app.get("/api/memory", (req, res) => res.json({ memory: readMemory() }));
 app.put("/api/memory", (req, res) => {
   writeMemory(String(req.body.memory ?? ""));
   res.json({ ok: true });
+});
+// "Memory dreaming": a one-off Codex turn on a fresh thread that rewrites
+// memory.md in place. GET hands the UI the same prompt + marker so it can build
+// the weekly version of this as a scheduled task.
+app.get("/api/memory/optimize", (req, res) =>
+  res.json({ marker: MEMORY_TASK_MARKER, prompt: memoryOptimizePrompt() }));
+app.post("/api/memory/optimize", async (req, res) => {
+  const before = readMemory();
+  if (!before.trim()) return res.json({ summary: "Nothing to optimize — memory is empty.", memory: before });
+  try {
+    const { finalText } = await runTurn(getThread(null), memoryOptimizePrompt(), () => {});
+    const summary = finalText.trim().split("\n").filter((l) => l.trim()).pop();
+    res.json({ summary: summary || "Memory rewritten.", memory: readMemory() });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e?.message || e) });
+  }
 });
 app.get("/api/settings", (req, res) => res.json(readSettings()));
 app.put("/api/settings", (req, res) => {
