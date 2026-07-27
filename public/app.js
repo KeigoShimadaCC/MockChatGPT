@@ -233,6 +233,23 @@ function renderActivityEntry(timeline, items, ev) {
   const label = node.querySelector(".label");
   label.textContent = ev.kind === "reasoning" ? "" : ev.label;
   node.querySelector(".detail").textContent = ev.detail || "";
+  if (ev.imageUrl) {
+    let shot = node.querySelector(".activity-shot");
+    if (!shot) {
+      shot = document.createElement("a");
+      shot.className = "activity-shot";
+      shot.target = "_blank";
+      shot.rel = "noopener";
+      shot.appendChild(document.createElement("img"));
+      node.appendChild(shot);
+    }
+    shot.href = ev.imageUrl;
+    const img = shot.firstChild;
+    if (img.getAttribute("src") !== ev.imageUrl) {
+      img.src = ev.imageUrl;
+      img.alt = ev.detail || "Browser screenshot";
+    }
+  }
   if (ev.output && !node.querySelector(".output")) {
     const toggle = document.createElement("button");
     toggle.className = "output-toggle";

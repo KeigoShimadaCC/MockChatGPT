@@ -256,6 +256,12 @@ body {
 .activity.kind-reasoning .detail {
   font-family: inherit; font-size: 13.5px; font-style: italic; white-space: pre-wrap;
 }
+.activity .activity-shot { display: block; margin-top: 2px; line-height: 0; }
+.activity .activity-shot img {
+  max-height: 180px; max-width: 100%; display: block;
+  border: 1px solid var(--border); border-radius: 10px;
+}
+.activity .activity-shot:hover img { border-color: var(--text-secondary); }
 .activity .output {
   background: var(--bg-code); border: 1px solid var(--border);
   border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace;
