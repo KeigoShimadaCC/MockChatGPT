@@ -330,6 +330,12 @@ body {
   box-shadow: 0 10px 32px rgba(0,0,0,0.18); padding: 6px;
 }
 #mode-menu[hidden] { display: none; }
+.menu-check {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  margin-top: 4px; padding: 8px 12px; border-top: 1px solid var(--border);
+  font-size: 13px; color: var(--text-secondary);
+}
+.menu-check input { accent-color: var(--accent); }
 
 /* ---------- Modal ---------- */
 #modal-backdrop[hidden], .backdrop[hidden] { display: none; }
@@ -400,6 +406,22 @@ body {
 }
 .mcp-card .actions { display: flex; gap: 8px; }
 .mcp-card .status { font-size: 13px; color: var(--text-secondary); }
+.plan-card .plan-rows { display: flex; flex-direction: column; gap: 6px; }
+.plan-card .plan-row { display: flex; gap: 6px; align-items: center; }
+.plan-card .plan-row input {
+  flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+  font-family: inherit; font-size: 13.5px; background: var(--bg-composer); color: var(--text); outline: none;
+}
+.plan-card .plan-row input:disabled { opacity: 0.7; }
+.plan-card .plan-remove, .plan-card .plan-add, .plan-card .plan-cancel {
+  background: none; border: 1px solid var(--border); border-radius: 999px;
+  color: var(--text-secondary); cursor: pointer; font-size: 13px;
+}
+.plan-card .plan-remove { border-color: transparent; padding: 4px 7px; line-height: 1; }
+.plan-card .plan-remove:hover { background: var(--bg-hover); color: var(--text); }
+.plan-card .plan-add { align-self: flex-start; padding: 5px 12px; }
+.plan-card .plan-add:hover, .plan-card .plan-cancel:hover { background: var(--bg-hover); color: var(--text); }
+.plan-card .plan-cancel { padding: 10px 20px; font-weight: 600; }
 .modal-header {
   display: flex; justify-content: space-between; align-items: center;
   padding: 18px 22px; border-bottom: 1px solid var(--border);

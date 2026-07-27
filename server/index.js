@@ -240,7 +240,7 @@ app.put("/api/settings", (req, res) => {
 app.post("/api/conversations/:id/messages", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ error: "not found" });
-  const { text = "", attachments = [], researchMode = "" } = req.body || {};
+  const { text = "", attachments = [], researchMode = "", approvedPlan = [] } = req.body || {};
   if (!text.trim() && attachments.length === 0) return res.status(400).json({ error: "empty message" });
 
   res.writeHead(200, {
@@ -269,7 +269,7 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   const isFirstTurn = !conv.threadId;
   let promptText = "";
   if (isFirstTurn) promptText += buildPreamble(conv.projectId) + "\n\n";
-  promptText += researchProtocol(researchMode);
+  promptText += researchProtocol(researchMode, approvedPlan);
   const nonImageFiles = attachments.filter((a) => !a.isImage);
   if (nonImageFiles.length) {
     promptText += `[The user attached files, available in your workspace: ${nonImageFiles
