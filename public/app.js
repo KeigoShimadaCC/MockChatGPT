@@ -30,8 +30,10 @@ function renderMarkdown(md) {
   tpl.querySelectorAll("pre > code").forEach((code) => {
     const pre = code.parentElement;
     const lang = (code.className.match(/language-([\w+-]+)/) || [])[1] || "";
-    if (lang === "mcp-install") {
-      const card = buildMcpInstallCard(code.textContent);
+    if (lang === "mcp-install" || lang === "task-create") {
+      const card = lang === "mcp-install"
+        ? buildMcpInstallCard(code.textContent)
+        : buildTaskCreateCard(code.textContent);
       if (card) {
         pre.replaceWith(card);
         return;
@@ -530,7 +532,67 @@ $("#settings-btn").addEventListener("click", async () => {
   $("#set-instructions").value = settings.customInstructions || "";
   $("#set-memory-enabled").checked = settings.memoryEnabled !== false;
   $("#set-memory").value = mem.memory || "";
+  $("#memory-optimize-status").textContent = "";
+  refreshMemoryWeekly();
   backdrop.hidden = false;
+});
+
+/* memory "dreaming" — on-demand and weekly rewrites of memory.md */
+
+let memoryTaskSpec = null; // { marker, prompt } from the server
+
+async function getMemoryTaskSpec() {
+  if (!memoryTaskSpec) memoryTaskSpec = await fetch("/api/memory/optimize").then((r) => r.json());
+  return memoryTaskSpec;
+}
+
+async function findMemoryTasks() {
+  const [{ marker }, tasks] = await Promise.all([getMemoryTaskSpec(), fetch("/api/tasks").then((r) => r.json())]);
+  return tasks.filter((t) => t.prompt.includes(marker));
+}
+
+async function refreshMemoryWeekly() {
+  $("#set-memory-weekly").checked = (await findMemoryTasks()).length > 0;
+}
+
+$("#set-memory-weekly").addEventListener("change", async (e) => {
+  const box = e.target;
+  box.disabled = true;
+  const existing = await findMemoryTasks();
+  if (box.checked) {
+    if (!existing.length) {
+      const { prompt } = await getMemoryTaskSpec();
+      await fetch("/api/tasks", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, schedule: { type: "weekly", weekday: 0, time: "05:00" } }),
+      });
+    }
+  } else {
+    for (const t of existing) await fetch(`/api/tasks/${t.id}`, { method: "DELETE" });
+  }
+  box.disabled = false;
+  refreshMemoryWeekly();
+});
+
+$("#memory-optimize").addEventListener("click", async () => {
+  const btn = $("#memory-optimize");
+  const status = $("#memory-optimize-status");
+  btn.disabled = true;
+  btn.textContent = "Optimizing…";
+  status.textContent = "Rewriting memory.md — this can take a minute.";
+  try {
+    const res = await fetch("/api/memory/optimize", { method: "POST" }).then((r) => r.json());
+    if (res.error) {
+      status.textContent = "Failed: " + res.error;
+    } else {
+      $("#set-memory").value = res.memory || "";
+      status.textContent = res.summary;
+    }
+  } catch (err) {
+    status.textContent = "Failed: " + err.message;
+  }
+  btn.disabled = false;
+  btn.textContent = "Optimize memory";
 });
 $("#modal-close").addEventListener("click", () => (backdrop.hidden = true));
 backdrop.addEventListener("click", (e) => {
@@ -735,8 +797,26 @@ $("#task-type").addEventListener("change", () => {
   }
 });
 
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 function fmtWhen(ts) {
   return ts ? new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+}
+
+function scheduleLabel(s) {
+  switch (s?.type) {
+    case "daily": return `every day at ${s.time}`;
+    case "weekly": return `every ${WEEKDAYS[Number(s.weekday ?? 1)] || "Monday"} at ${s.time}`;
+    case "interval": return `every ${Math.max(5, Number(s.minutes) || 60)} minutes`;
+    case "once": return `once, at ${fmtWhen(new Date(s.at).getTime())}`;
+    default: return "on an unknown schedule";
+  }
+}
+
+// datetime-local wants a local (not UTC) "YYYY-MM-DDTHH:MM" string
+function localDateTimeValue(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 async function refreshTasks() {
@@ -937,6 +1017,92 @@ function buildMcpInstallCard(jsonText) {
     }).then((r) => r.json());
     status.textContent = res.error ? "Failed: " + res.error : `Installed ✓ — "${spec.name}" is now available to the agent in new messages.`;
     if (res.error) approve.disabled = false;
+  });
+  actions.appendChild(approve);
+  card.append(actions, status);
+  return card;
+}
+
+// approval card rendered when the agent proposes a scheduled task in chat
+function buildTaskCreateCard(jsonText) {
+  let spec;
+  try {
+    spec = JSON.parse(jsonText.trim());
+  } catch {
+    return null;
+  }
+  const type = spec?.schedule?.type;
+  if (!spec?.prompt || !["daily", "weekly", "interval", "once"].includes(type)) return null;
+
+  const card = document.createElement("div");
+  card.className = "mcp-card";
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = "⏰ Scheduled task proposal";
+  const reason = document.createElement("div");
+  reason.textContent = spec.reason || "";
+  const prompt = document.createElement("div");
+  prompt.className = "cmd";
+  prompt.textContent = spec.prompt;
+  card.append(title, reason, prompt);
+
+  // the one part of the schedule worth tweaking before approving
+  const when = document.createElement("div");
+  when.className = "when";
+  const label = document.createElement("span");
+  const field = document.createElement("input");
+  const unit = document.createElement("span");
+  if (type === "interval") {
+    label.textContent = "Every";
+    field.type = "number";
+    field.min = "5";
+    field.style.width = "80px";
+    field.value = String(Math.max(5, Number(spec.schedule.minutes) || 60));
+    unit.textContent = "minutes";
+  } else if (type === "once") {
+    label.textContent = "Once, at";
+    field.type = "datetime-local";
+    const at = new Date(spec.schedule.at);
+    field.value = isNaN(at.getTime()) ? "" : localDateTimeValue(at);
+  } else {
+    label.textContent = type === "weekly" ? `Every ${WEEKDAYS[Number(spec.schedule.weekday ?? 1)] || "Monday"} at` : "Every day at";
+    field.type = "time";
+    field.value = /^\d{1,2}:\d{2}$/.test(spec.schedule.time || "") ? spec.schedule.time : "09:00";
+  }
+  when.append(label, field, unit);
+  card.appendChild(when);
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const approve = document.createElement("button");
+  approve.className = "primary";
+  approve.textContent = "Approve & schedule";
+  const status = document.createElement("div");
+  status.className = "status";
+  approve.addEventListener("click", async () => {
+    const schedule = { type };
+    if (type === "interval") {
+      schedule.minutes = Math.max(5, Number(field.value) || 60);
+    } else if (type === "once") {
+      if (!field.value) return void (status.textContent = "Pick a date and time first.");
+      schedule.at = new Date(field.value).toISOString();
+    } else {
+      schedule.time = field.value;
+      if (type === "weekly") schedule.weekday = Number(spec.schedule.weekday ?? 1);
+    }
+    approve.disabled = true;
+    status.textContent = "Scheduling…";
+    const res = await fetch("/api/tasks", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: spec.prompt, schedule }),
+    }).then((r) => r.json());
+    if (res.error) {
+      status.textContent = "Failed: " + res.error;
+      approve.disabled = false;
+      return;
+    }
+    status.textContent = `Scheduled ✓ — ${scheduleLabel(res.schedule)}, first run ${fmtWhen(res.nextRun)}. Manage it under "Scheduled tasks".`;
+    loadConversations();
   });
   actions.appendChild(approve);
   card.append(actions, status);

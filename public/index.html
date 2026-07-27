@@ -214,6 +214,16 @@
             <span>Saved memories (memory.md)</span>
             <textarea id="set-memory" rows="6" placeholder="Nothing saved yet."></textarea>
           </label>
+          <div class="field">
+            <div class="form-row">
+              <button id="memory-optimize" class="ghost">Optimize memory</button>
+              <label class="field checkbox">
+                <input id="set-memory-weekly" type="checkbox" />
+                <span>Optimize weekly</span>
+              </label>
+            </div>
+            <div id="memory-optimize-status" class="mcp-note"></div>
+          </div>
         </div>
         <div class="modal-footer">
           <button id="settings-save" class="primary">Save</button>
