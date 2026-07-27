@@ -191,6 +191,32 @@ body {
   max-width: 100%;
 }
 .msg .attachment-chips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-bottom: 6px; }
+
+/* hover actions under the last exchange (edit / regenerate) */
+.msg-actions { display: flex; gap: 4px; margin-top: 6px; opacity: 0; transition: opacity 0.12s; }
+.msg:hover .msg-actions, .msg-actions:focus-within { opacity: 1; }
+.msg-actions button {
+  background: none; border: none; border-radius: 8px; cursor: pointer;
+  padding: 4px 8px; font-size: 12.5px; color: var(--text-secondary);
+}
+.msg-actions button:hover { background: var(--bg-hover); color: var(--text); }
+
+/* inline edit of the last question */
+.msg.user .msg-box.editing { width: 100%; }
+.msg-editor { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.msg-editor textarea {
+  width: 100%; resize: vertical; font: inherit; font-size: 15px; color: var(--text);
+  background: var(--bg-bubble); border: 1px solid var(--border);
+  border-radius: 18px; padding: 12px 16px;
+}
+.msg-editor textarea:focus { outline: none; border-color: var(--text-secondary); }
+.editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.editor-actions button {
+  border: 1px solid var(--border); background: none; color: var(--text);
+  border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+}
+.editor-actions button:hover { background: var(--bg-hover); }
+.editor-actions .primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 .attachment-chip {
   display: flex; align-items: center; gap: 8px;
   border: 1px solid var(--border); border-radius: 12px;
