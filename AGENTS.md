@@ -7,8 +7,9 @@ ChatGPT-lookalike chat app powered by the OpenAI Codex SDK (`@openai/codex-sdk`)
 ```bash
 npm start                 # serve on http://localhost:3939 (PORT env to change)
 npm run dev               # same, with --watch
-# restart after server changes:
-pkill -f "node server/index.js"; npm start &
+# restart after server changes (targeted: the broad pattern
+# 'node server/index.js' would also kill servers running in git worktrees):
+pkill -f "Documents/MockChatGPT/server/index.js"; npm start &
 ```
 
 There is no build step (vanilla JS frontend, no bundler) and no test suite — verify changes by hitting the running server:
