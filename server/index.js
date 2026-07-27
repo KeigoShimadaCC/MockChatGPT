@@ -361,7 +361,7 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   try {
     const thread = getThread(conv.threadId);
     const { threadId, finalText, aborted } =
-      researchMode === "heavy"
+      /^heavy(-exec)?$/.test(researchMode)
         ? await runHeavyResearch(thread, input, sendAndRecord, text)
         : await runTurn(thread, input, sendAndRecord, run.controller.signal);
     const stopped = aborted || run.stopped;

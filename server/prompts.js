@@ -65,8 +65,10 @@ Do NOT search the web, fetch pages, run commands or write files on this turn —
 // Per-turn protocol prepended when the user picks a research mode.
 // `mode` is "wide"/"deep" (plan first) or "wide-exec"/"deep-exec" (run it).
 export function researchProtocol(mode, approvedPlan = []) {
-  if (mode === "heavy") return HEAVY_PLANNING;
   const base = String(mode || "").replace(/-exec$/, "");
+  // heavy runs its own plan phase; accept both forms so a stray "heavy-exec"
+  // can't silently strip the decomposition instructions
+  if (base === "heavy") return HEAVY_PLANNING;
   if (!EXECUTION[base]) return "";
   if (base === mode) return planningProtocol(base);
   const items = (Array.isArray(approvedPlan) ? approvedPlan : [])
