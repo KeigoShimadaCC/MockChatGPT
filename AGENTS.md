@@ -7,9 +7,10 @@ ChatGPT-lookalike chat app powered by the OpenAI Codex SDK (`@openai/codex-sdk`)
 ```bash
 npm start                 # serve on http://localhost:3939 (PORT env to change)
 npm run dev               # same, with --watch
-# restart after server changes (targeted: the broad pattern
-# 'node server/index.js' would also kill servers running in git worktrees):
-pkill -f "Documents/MockChatGPT/server/index.js"; npm start &
+# restart after server changes — kill by PORT, not by command-line pattern:
+# pkill -f 'node server/index.js' also kills worktree test servers, and a
+# path-qualified pattern misses servers launched with a relative path.
+kill $(lsof -ti :3939); npm start &
 ```
 
 There is no build step (vanilla JS frontend, no bundler) and no test suite — verify changes by hitting the running server:
