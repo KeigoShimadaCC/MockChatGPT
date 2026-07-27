@@ -1,0 +1,120 @@
+import { Codex } from "@openai/codex-sdk";
+import { WORKSPACE } from "./store.js";
+
+const codex = new Codex();
+
+const THREAD_OPTIONS = {
+  workingDirectory: WORKSPACE,
+  skipGitRepoCheck: true,
+  sandboxMode: "workspace-write",
+  webSearchEnabled: true,
+};
+
+export function getThread(threadId) {
+  return threadId
+    ? codex.resumeThread(threadId, THREAD_OPTIONS)
+    : codex.startThread(THREAD_OPTIONS);
+}
+
+// Runs one turn and forwards simplified events to `emit(event)`.
+// Returns { threadId, finalText }.
+export async function runTurn(thread, input, emit) {
+  const { events } = await thread.runStreamed(input);
+  // Codex can emit several agent_message items per turn (progress notes + final
+  // answer); accumulate them so earlier ones aren't overwritten.
+  const parts = [];
+  let partial = "";
+  let finalText = "";
+
+  for await (const event of events) {
+    switch (event.type) {
+      case "item.started":
+      case "item.updated":
+      case "item.completed": {
+        const item = event.item;
+        const done = event.type === "item.completed";
+        switch (item.type) {
+          case "agent_message":
+            if (item.text) {
+              if (done) {
+                parts.push(item.text);
+                partial = "";
+              } else {
+                partial = item.text;
+              }
+              finalText = parts.concat(partial ? [partial] : []).join("\n\n");
+              emit({ type: done ? "assistant" : "assistant_delta", text: finalText });
+            }
+            break;
+          case "reasoning":
+            emit({
+              type: "activity",
+              kind: "reasoning",
+              label: "Thinking",
+              detail: (item.summary || []).join("\n"),
+              done,
+            });
+            break;
+          case "command_execution":
+            emit({
+              type: "activity",
+              kind: "command",
+              label: done ? "Ran command" : "Running command",
+              detail: item.command,
+              output: done ? truncate(item.aggregated_output, 4000) : undefined,
+              exitCode: item.exit_code,
+              done,
+            });
+            break;
+          case "web_search":
+            emit({
+              type: "activity",
+              kind: "search",
+              label: done ? "Searched the web" : "Searching the web",
+              detail: item.query,
+              done,
+            });
+            break;
+          case "file_change":
+            emit({
+              type: "activity",
+              kind: "file",
+              label: "Edited files",
+              detail: (item.changes || []).map((c) => c.path).join(", "),
+              done,
+            });
+            break;
+          case "mcp_tool_call":
+            emit({
+              type: "activity",
+              kind: "tool",
+              label: `Using ${item.server}`,
+              detail: item.tool,
+              done,
+            });
+            break;
+          case "error":
+            emit({ type: "activity", kind: "error", label: "Error", detail: item.message, done: true });
+            break;
+        }
+        break;
+      }
+      case "turn.completed":
+        emit({ type: "usage", usage: event.usage });
+        break;
+      case "turn.failed":
+        emit({ type: "error", message: event.error?.message || "The turn failed." });
+        break;
+      case "error":
+        emit({ type: "error", message: event.message || "Unknown error" });
+        break;
+    }
+  }
+
+  return { threadId: thread.id, finalText };
+}
+
+function truncate(s, n) {
+  if (!s) return s;
+  return s.length > n ? s.slice(0, n) + "\n… (truncated)" : s;
+}

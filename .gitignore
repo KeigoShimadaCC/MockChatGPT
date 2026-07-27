@@ -1,0 +1,7 @@
+node_modules/
+data/
+workspace/uploads/
+workspace/generated/
+workspace/memory.md
+.DS_Store
+*.log
