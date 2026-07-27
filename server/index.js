@@ -25,6 +25,7 @@ import { buildPreamble, researchProtocol } from "./prompts.js";
 import { getThread, runTurn } from "./codexClient.js";
 import { listServers, installServer, removeServer } from "./mcp.js";
 import { listTasks, createTask, updateTask, deleteTask, runTask, startScheduler } from "./scheduler.js";
+import { listSkills, readSkill, writeSkill, deleteSkill, ensureIndex } from "./skills.js";
 
 const app = express();
 const PORT = process.env.PORT || 3939;
@@ -117,6 +118,33 @@ app.post("/api/mcp/install", async (req, res) => {
 app.delete("/api/mcp/:name", async (req, res) => {
   try {
     res.json(await removeServer(req.params.name));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ---------- skills (agent-authored playbooks) ----------
+app.get("/api/skills", (req, res) => res.json(listSkills()));
+app.get("/api/skills/:slug", (req, res) => {
+  try {
+    const content = readSkill(req.params.slug);
+    if (content === null) return res.status(404).json({ error: "not found" });
+    res.json({ slug: req.params.slug, content });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.put("/api/skills/:slug", (req, res) => {
+  try {
+    res.json(writeSkill(req.params.slug, req.body?.content));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.delete("/api/skills/:slug", (req, res) => {
+  try {
+    deleteSkill(req.params.slug);
+    res.json({ ok: true });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -285,5 +313,6 @@ app.listen(PORT, () => {
   if (!fs.existsSync(path.join(WORKSPACE, "AGENTS.md"))) {
     console.warn("note: workspace/AGENTS.md missing");
   }
+  ensureIndex();
   startScheduler();
 });

@@ -353,13 +353,19 @@ body {
   font-size: 14px; background: var(--bg-composer); color: var(--text); font-family: inherit; width: 100%; resize: vertical;
 }
 .task-form { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border); padding-top: 14px; }
-.task-row, .mcp-row {
+.task-row, .mcp-row, .skill-row {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px;
   font-size: 13.5px;
 }
-.task-row .grow, .mcp-row .grow { flex: 1; min-width: 0; }
-.task-row .meta, .mcp-row .meta { color: var(--text-secondary); font-size: 12px; }
+.task-row .grow, .mcp-row .grow, .skill-row .grow { flex: 1; min-width: 0; }
+.task-row .meta, .mcp-row .meta, .skill-row .meta { color: var(--text-secondary); font-size: 12px; }
+.skill-row .grow > div:first-child { font-weight: 600; }
+.skill-row .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#skill-editor { display: flex; flex-direction: column; gap: 10px; }
+#skill-editor[hidden] { display: none; }
+#skill-content { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; line-height: 1.55; }
+#skill-status { color: var(--text-secondary); font-size: 12px; }
 .task-row .t-prompt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mini-btn {
   background: none; border: 1px solid var(--border); border-radius: 8px;
