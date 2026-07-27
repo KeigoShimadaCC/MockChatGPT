@@ -191,6 +191,32 @@ body {
   max-width: 100%;
 }
 .msg .attachment-chips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-bottom: 6px; }
+
+/* hover actions under the last exchange (edit / regenerate) */
+.msg-actions { display: flex; gap: 4px; margin-top: 6px; opacity: 0; transition: opacity 0.12s; }
+.msg:hover .msg-actions, .msg-actions:focus-within { opacity: 1; }
+.msg-actions button {
+  background: none; border: none; border-radius: 8px; cursor: pointer;
+  padding: 4px 8px; font-size: 12.5px; color: var(--text-secondary);
+}
+.msg-actions button:hover { background: var(--bg-hover); color: var(--text); }
+
+/* inline edit of the last question */
+.msg.user .msg-box.editing { width: 100%; }
+.msg-editor { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.msg-editor textarea {
+  width: 100%; resize: vertical; font: inherit; font-size: 15px; color: var(--text);
+  background: var(--bg-bubble); border: 1px solid var(--border);
+  border-radius: 18px; padding: 12px 16px;
+}
+.msg-editor textarea:focus { outline: none; border-color: var(--text-secondary); }
+.editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.editor-actions button {
+  border: 1px solid var(--border); background: none; color: var(--text);
+  border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+}
+.editor-actions button:hover { background: var(--bg-hover); }
+.editor-actions .primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 .attachment-chip {
   display: flex; align-items: center; gap: 8px;
   border: 1px solid var(--border); border-radius: 12px;
@@ -256,6 +282,12 @@ body {
 .activity.kind-reasoning .detail {
   font-family: inherit; font-size: 13.5px; font-style: italic; white-space: pre-wrap;
 }
+.activity .activity-shot { display: block; margin-top: 2px; line-height: 0; }
+.activity .activity-shot img {
+  max-height: 180px; max-width: 100%; display: block;
+  border: 1px solid var(--border); border-radius: 10px;
+}
+.activity .activity-shot:hover img { border-color: var(--text-secondary); }
 .activity .output {
   background: var(--bg-code); border: 1px solid var(--border);
   border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace;
@@ -330,6 +362,12 @@ body {
   box-shadow: 0 10px 32px rgba(0,0,0,0.18); padding: 6px;
 }
 #mode-menu[hidden] { display: none; }
+.menu-check {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  margin-top: 4px; padding: 8px 12px; border-top: 1px solid var(--border);
+  font-size: 13px; color: var(--text-secondary);
+}
+.menu-check input { accent-color: var(--accent); }
 
 /* ---------- Modal ---------- */
 #modal-backdrop[hidden], .backdrop[hidden] { display: none; }
@@ -353,13 +391,19 @@ body {
   font-size: 14px; background: var(--bg-composer); color: var(--text); font-family: inherit; width: 100%; resize: vertical;
 }
 .task-form { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border); padding-top: 14px; }
-.task-row, .mcp-row {
+.task-row, .mcp-row, .skill-row {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px;
   font-size: 13.5px;
 }
-.task-row .grow, .mcp-row .grow { flex: 1; min-width: 0; }
-.task-row .meta, .mcp-row .meta { color: var(--text-secondary); font-size: 12px; }
+.task-row .grow, .mcp-row .grow, .skill-row .grow { flex: 1; min-width: 0; }
+.task-row .meta, .mcp-row .meta, .skill-row .meta { color: var(--text-secondary); font-size: 12px; }
+.skill-row .grow > div:first-child { font-weight: 600; }
+.skill-row .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#skill-editor { display: flex; flex-direction: column; gap: 10px; }
+#skill-editor[hidden] { display: none; }
+#skill-content { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; line-height: 1.55; }
+#skill-status { color: var(--text-secondary); font-size: 12px; }
 .task-row .t-prompt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mini-btn {
   background: none; border: 1px solid var(--border); border-radius: 8px;
@@ -378,7 +422,7 @@ body {
   border-radius: 999px; padding: 9px 18px; font-size: 13px; cursor: pointer; margin-right: auto;
 }
 
-/* mcp-install approval card */
+/* in-chat approval cards (mcp-install, task-create) */
 .mcp-card {
   border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; margin: 10px 0;
   display: flex; flex-direction: column; gap: 8px; font-size: 14px;
@@ -387,8 +431,29 @@ body {
 .mcp-card .cmd { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: var(--text-secondary); overflow-wrap: anywhere; }
 .mcp-card .env-row { display: flex; gap: 6px; align-items: center; font-size: 13px; }
 .mcp-card .env-row input { flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; background: var(--bg-composer); color: var(--text); }
+.mcp-card .when { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.mcp-card .when input {
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+  background: var(--bg-composer); color: var(--text); font-family: inherit; font-size: 13px;
+}
 .mcp-card .actions { display: flex; gap: 8px; }
 .mcp-card .status { font-size: 13px; color: var(--text-secondary); }
+.plan-card .plan-rows { display: flex; flex-direction: column; gap: 6px; }
+.plan-card .plan-row { display: flex; gap: 6px; align-items: center; }
+.plan-card .plan-row input {
+  flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+  font-family: inherit; font-size: 13.5px; background: var(--bg-composer); color: var(--text); outline: none;
+}
+.plan-card .plan-row input:disabled { opacity: 0.7; }
+.plan-card .plan-remove, .plan-card .plan-add, .plan-card .plan-cancel {
+  background: none; border: 1px solid var(--border); border-radius: 999px;
+  color: var(--text-secondary); cursor: pointer; font-size: 13px;
+}
+.plan-card .plan-remove { border-color: transparent; padding: 4px 7px; line-height: 1; }
+.plan-card .plan-remove:hover { background: var(--bg-hover); color: var(--text); }
+.plan-card .plan-add { align-self: flex-start; padding: 5px 12px; }
+.plan-card .plan-add:hover, .plan-card .plan-cancel:hover { background: var(--bg-hover); color: var(--text); }
+.plan-card .plan-cancel { padding: 10px 20px; font-weight: 600; }
 .modal-header {
   display: flex; justify-content: space-between; align-items: center;
   padding: 18px 22px; border-bottom: 1px solid var(--border);

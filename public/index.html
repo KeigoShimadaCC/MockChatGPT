@@ -40,6 +40,10 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 9.4 7.55 4.24M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></svg>
           <span>Connectors</span>
         </button>
+        <button id="skills-btn" class="sidebar-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h7"/><path d="M9 11h5"/></svg>
+          <span>Skills</span>
+        </button>
         <button id="settings-btn" class="sidebar-item">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span>Settings</span>
@@ -101,6 +105,10 @@
                 <button class="menu-item" data-mode="wide">Research: Wide <span class="menu-desc">many sources, broad sweep</span></button>
                 <button class="menu-item" data-mode="deep">Research: Deep <span class="menu-desc">iterative, follows the trail</span></button>
                 <button class="menu-item" data-mode="heavy">Research: Heavy <span class="menu-desc">parallel sub-researchers, slow &amp; thorough</span></button>
+                <label class="menu-check" title="Run the research straight away instead of proposing an editable plan first">
+                  <input type="checkbox" id="skip-plan-check" />
+                  <span>Skip plan approval</span>
+                </label>
               </div>
             </div>
             <textarea id="prompt-input" rows="1" placeholder="Ask anything"></textarea>
@@ -167,6 +175,27 @@
       </div>
     </div>
 
+    <!-- Skills modal -->
+    <div id="skills-backdrop" class="backdrop" hidden>
+      <div class="modal">
+        <div class="modal-header"><h2>Skills</h2><button class="modal-x" data-close="skills-backdrop">✕</button></div>
+        <div class="modal-body">
+          <div class="mcp-note">Playbooks MockChatGPT writes for itself as you work — it reads them before similar tasks later. They live in <code>workspace/skills/</code>.</div>
+          <div id="skill-list"></div>
+          <div id="skill-editor" hidden>
+            <label class="field"><span id="skill-editor-title">Edit skill</span>
+              <textarea id="skill-content" rows="16" spellcheck="false"></textarea>
+            </label>
+            <div class="form-row">
+              <button id="skill-save" class="primary">Save</button>
+              <button id="skill-cancel" class="ghost">Cancel</button>
+              <span id="skill-status" class="meta"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Project modal -->
     <div id="project-backdrop" class="backdrop" hidden>
       <div class="modal">
@@ -215,6 +244,16 @@
             <span>Saved memories (memory.md)</span>
             <textarea id="set-memory" rows="6" placeholder="Nothing saved yet."></textarea>
           </label>
+          <div class="field">
+            <div class="form-row">
+              <button id="memory-optimize" class="ghost">Optimize memory</button>
+              <label class="field checkbox">
+                <input id="set-memory-weekly" type="checkbox" />
+                <span>Optimize weekly</span>
+              </label>
+            </div>
+            <div id="memory-optimize-status" class="mcp-note"></div>
+          </div>
         </div>
         <div class="modal-footer">
           <button id="settings-save" class="primary">Save</button>

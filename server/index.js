@@ -21,11 +21,12 @@ import {
   updateProject,
   deleteProject,
 } from "./store.js";
-import { buildPreamble, researchProtocol } from "./prompts.js";
+import { buildPreamble, researchProtocol, memoryOptimizePrompt, MEMORY_TASK_MARKER } from "./prompts.js";
 import { getThread, runTurn } from "./codexClient.js";
 import { runHeavyResearch } from "./heavyResearch.js";
 import { listServers, installServer, removeServer } from "./mcp.js";
 import { listTasks, createTask, updateTask, deleteTask, runTask, startScheduler } from "./scheduler.js";
+import { listSkills, readSkill, writeSkill, deleteSkill, ensureIndex } from "./skills.js";
 
 const app = express();
 const PORT = process.env.PORT || 3939;
@@ -123,6 +124,33 @@ app.delete("/api/mcp/:name", async (req, res) => {
   }
 });
 
+// ---------- skills (agent-authored playbooks) ----------
+app.get("/api/skills", (req, res) => res.json(listSkills()));
+app.get("/api/skills/:slug", (req, res) => {
+  try {
+    const content = readSkill(req.params.slug);
+    if (content === null) return res.status(404).json({ error: "not found" });
+    res.json({ slug: req.params.slug, content });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.put("/api/skills/:slug", (req, res) => {
+  try {
+    res.json(writeSkill(req.params.slug, req.body?.content));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.delete("/api/skills/:slug", (req, res) => {
+  try {
+    deleteSkill(req.params.slug);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // ---------- conversations ----------
 app.get("/api/conversations", (req, res) => res.json(listConversations()));
 app.post("/api/conversations", (req, res) => res.json(createConversation(req.body?.projectId || null)));
@@ -185,6 +213,23 @@ app.put("/api/memory", (req, res) => {
   writeMemory(String(req.body.memory ?? ""));
   res.json({ ok: true });
 });
+// "Memory dreaming": a one-off Codex turn on a fresh thread that rewrites
+// memory.md in place. GET hands the UI the same prompt + marker so it can build
+// the weekly version of this as a scheduled task.
+app.get("/api/memory/optimize", (req, res) =>
+  res.json({ marker: MEMORY_TASK_MARKER, prompt: memoryOptimizePrompt() }));
+app.post("/api/memory/optimize", async (req, res) => {
+  const before = readMemory();
+  if (!before.trim()) return res.json({ summary: "Nothing to optimize — memory is empty.", memory: before });
+  try {
+    const { finalText } = await runTurn(getThread(null), memoryOptimizePrompt(), () => {});
+    const summary = finalText.trim().split("\n").filter((l) => l.trim()).pop();
+    res.json({ summary: summary || "Memory rewritten.", memory: readMemory() });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
 app.get("/api/settings", (req, res) => res.json(readSettings()));
 app.put("/api/settings", (req, res) => {
   const cur = readSettings();
@@ -193,11 +238,52 @@ app.put("/api/settings", (req, res) => {
 });
 
 // ---------- chat (SSE) ----------
+
+// In-flight codex turns keyed by conversation id, so /stop can cancel one.
+const activeRuns = new Map();
+
+const REGENERATE_PROMPT =
+  "Your previous answer wasn't quite right — answer my previous message again, better.";
+const revisePrompt = (text) =>
+  `I'm revising my previous message to: ${text}\n\nPlease answer the revised version.`;
+
+// Kills the codex child process running this conversation's turn. The turn's
+// own request then saves the partial answer and closes its SSE stream.
+app.post("/api/conversations/:id/stop", (req, res) => {
+  const run = activeRuns.get(req.params.id);
+  if (!run) return res.status(404).json({ error: "no active run" });
+  run.stopped = true;
+  run.controller.abort();
+  console.log(`[stop] aborted turn for conversation ${req.params.id}`);
+  res.json({ ok: true, stopped: true });
+});
+
 app.post("/api/conversations/:id/messages", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ error: "not found" });
-  const { text = "", attachments = [], researchMode = "" } = req.body || {};
-  if (!text.trim() && attachments.length === 0) return res.status(400).json({ error: "empty message" });
+  if (activeRuns.has(conv.id)) return res.status(409).json({ error: "a turn is already running" });
+  const { text = "", attachments = [], researchMode = "", replaceLast = "", approvedPlan = [] } = req.body || {};
+
+  // replaceLast rewrites the tail of the transcript instead of appending to it:
+  // "assistant" regenerates the last answer, "both" resends an edited question.
+  // Codex threads are stateful and can't be forked, so the thread just gets an
+  // extra instruction turn while the stored transcript keeps only one answer.
+  const last = conv.messages.at(-1);
+  const prev = conv.messages.at(-2);
+  if (replaceLast && replaceLast !== "assistant" && replaceLast !== "both") {
+    return res.status(400).json({ error: "replaceLast must be 'assistant' or 'both'" });
+  }
+  if (replaceLast && last?.role !== "assistant") {
+    return res.status(400).json({ error: "nothing to replace" });
+  }
+  if (replaceLast === "both" && prev?.role !== "user") {
+    return res.status(400).json({ error: "no user message to revise" });
+  }
+  if (replaceLast === "assistant") {
+    if (text.trim()) return res.status(400).json({ error: "regenerate takes no text" });
+  } else if (!text.trim() && attachments.length === 0) {
+    return res.status(400).json({ error: "empty message" });
+  }
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -208,13 +294,21 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
   const heartbeat = setInterval(() => res.write(": ping\n\n"), 15000);
 
-  // record user message
-  conv.messages.push({
-    role: "user",
-    text,
-    attachments: attachments.map((a) => ({ name: a.name, url: a.url, isImage: a.isImage })),
-    ts: Date.now(),
-  });
+  // drop the messages being replaced, then record the user message
+  if (replaceLast) conv.messages.pop();
+  const replacedUser = replaceLast === "both" ? conv.messages.pop() : null;
+  if (replaceLast !== "assistant") {
+    conv.messages.push({
+      role: "user",
+      text,
+      // an edited question keeps its original attachments: the thread already
+      // saw those files, so they are for display only and aren't re-sent
+      attachments: replacedUser
+        ? replacedUser.attachments || []
+        : attachments.map((a) => ({ name: a.name, url: a.url, isImage: a.isImage })),
+      ts: Date.now(),
+    });
+  }
   if (conv.title === "New chat" && text.trim()) {
     conv.title = text.trim().replace(/\s+/g, " ").slice(0, 48) + (text.trim().length > 48 ? "…" : "");
     send({ type: "title", title: conv.title });
@@ -225,7 +319,7 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   const isFirstTurn = !conv.threadId;
   let promptText = "";
   if (isFirstTurn) promptText += buildPreamble(conv.projectId) + "\n\n";
-  promptText += researchProtocol(researchMode);
+  promptText += researchProtocol(researchMode, approvedPlan);
   const nonImageFiles = attachments.filter((a) => !a.isImage);
   if (nonImageFiles.length) {
     promptText += `[The user attached files, available in your workspace: ${nonImageFiles
@@ -236,7 +330,8 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   if (imageFiles.length) {
     promptText += `[The user attached ${imageFiles.length} image(s), provided below]\n`;
   }
-  promptText += text;
+  promptText +=
+    replaceLast === "assistant" ? REGENERATE_PROMPT : replaceLast === "both" ? revisePrompt(text) : text;
 
   const input =
     imageFiles.length > 0
@@ -252,33 +347,44 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   const startedAt = Date.now();
   const sendAndRecord = (ev) => {
     if (ev.type === "activity") {
-      const existing = ev.id && activities.find((a) => a.id === ev.id && a.kind === ev.kind);
+      // Match on id alone: item ids are unique per turn, and an item's kind can
+      // change once it completes (a tool call turns out to have been browsing).
+      const existing = ev.id && activities.find((a) => a.id === ev.id);
       if (existing) Object.assign(existing, ev);
       else activities.push({ ...ev });
     }
     send(ev);
   };
 
+  const run = { controller: new AbortController(), stopped: false };
+  activeRuns.set(conv.id, run);
   try {
     const thread = getThread(conv.threadId);
-    const { threadId, finalText } =
+    const { threadId, finalText, aborted } =
       researchMode === "heavy"
         ? await runHeavyResearch(thread, input, sendAndRecord, text)
-        : await runTurn(thread, input, sendAndRecord);
+        : await runTurn(thread, input, sendAndRecord, run.controller.signal);
+    const stopped = aborted || run.stopped;
+    const answer = stopped ? (finalText ? `${finalText}
+
+_(stopped)_` : "_(stopped)_") : finalText;
     conv.threadId = threadId || conv.threadId;
     conv.messages.push({
       role: "assistant",
-      text: finalText,
+      text: answer,
       activities,
       durationMs: Date.now() - startedAt,
+      ...(stopped ? { stopped: true } : {}),
       ts: Date.now(),
     });
     saveConversation(conv);
+    if (stopped) send({ type: "stopped", text: answer });
     send({ type: "done", threadId: conv.threadId });
   } catch (err) {
     console.error(err);
     send({ type: "error", message: String(err?.message || err) });
   } finally {
+    activeRuns.delete(conv.id);
     clearInterval(heartbeat);
     res.end();
   }
@@ -289,5 +395,6 @@ app.listen(PORT, () => {
   if (!fs.existsSync(path.join(WORKSPACE, "AGENTS.md"))) {
     console.warn("note: workspace/AGENTS.md missing");
   }
+  ensureIndex();
   startScheduler();
 });

@@ -29,7 +29,7 @@ export async function runHeavyResearch(thread, input, emit, question, deps = { s
       detail: "No parseable subquestions block; running the single-agent wide protocol instead.",
       done: true,
     });
-    return deps.runTurn(thread, researchProtocol("wide") + question, emit);
+    return deps.runTurn(thread, researchProtocol("wide-exec") + question, emit);
   }
 
   const reports = await runWorkerPhase(plan.subQuestions, question, emit, deps);

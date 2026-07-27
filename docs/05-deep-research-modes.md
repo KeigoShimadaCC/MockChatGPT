@@ -44,7 +44,9 @@ MockChatGPT ships a composer-level mode picker (the Grok-style dial) with per-tu
 
   Guardrails: max 4 workers; a 10-minute wall-clock deadline per phase (`Promise.race` against a timer); isolated worker failure — one that throws or times out becomes an error row while synthesis proceeds with the survivors, its sub-question named to the synthesizer as a coverage gap. If the `subquestions` block can't be parsed the run degrades to the single-agent wide protocol rather than failing.
 
-Deliberate simplifications vs. the big players: no post-hoc citation agent (inline citation discipline is prompted instead), and no editable-plan UI yet (a natural next step: emit the plan, pause for user edit, then continue). Heavy mode closes the "no parallel subagents" gap — the Codex SDK runs one agent per thread, so parallelism comes from spawning several threads and multiplexing their event streams rather than from one agent fanning out.
+Both modes are **plan-first**, the Gemini pattern: the first turn only restates the question and emits its plan as a fenced `research-plan` JSON block, which the UI renders as a card of editable items. "Start research" sends a follow-up turn in mode `wide-exec`/`deep-exec` carrying the approved items, and the execution protocol above runs prefixed with "The user approved this plan — follow it". A "Skip plan approval" checkbox in the mode menu (persisted in localStorage) restores the original one-shot behaviour.
+
+Deliberate simplifications vs. the big players: no post-hoc citation agent (inline citation discipline is prompted instead). Heavy mode closes the "no parallel subagents" gap — the Codex SDK runs one agent per thread, so parallelism comes from spawning several threads and multiplexing their event streams.
 
 ## Sources
 

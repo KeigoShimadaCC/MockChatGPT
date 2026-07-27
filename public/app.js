@@ -19,10 +19,14 @@ let currentConv = null; // full conversation object
 let pendingAttachments = [];
 let streaming = false;
 let streamAbort = null;
+let streamConvId = null; // conversation whose turn is in flight (for /stop)
 
 marked.setOptions({ breaks: true, gfm: true });
 
-function renderMarkdown(md) {
+// `opts.planLive` is false for research-plan blocks in older messages — their
+// card renders read-only instead of offering a Start button that would run
+// research on top of a conversation that has already moved on.
+function renderMarkdown(md, opts = {}) {
   const html = DOMPurify.sanitize(marked.parse(md || ""));
   const tpl = document.createElement("div");
   tpl.innerHTML = html;
@@ -30,8 +34,17 @@ function renderMarkdown(md) {
   tpl.querySelectorAll("pre > code").forEach((code) => {
     const pre = code.parentElement;
     const lang = (code.className.match(/language-([\w+-]+)/) || [])[1] || "";
-    if (lang === "mcp-install") {
-      const card = buildMcpInstallCard(code.textContent);
+    if (lang === "mcp-install" || lang === "task-create") {
+      const card = lang === "mcp-install"
+        ? buildMcpInstallCard(code.textContent)
+        : buildTaskCreateCard(code.textContent);
+      if (card) {
+        pre.replaceWith(card);
+        return;
+      }
+    }
+    if (lang === "research-plan") {
+      const card = buildResearchPlanCard(code.textContent, opts.planLive !== false);
       if (card) {
         pre.replaceWith(card);
         return;
@@ -62,6 +75,7 @@ function renderMarkdown(md) {
 
 async function loadConversations() {
   conversations = await fetch("/api/conversations").then((r) => r.json());
+  detectTaskRuns();
   renderConvList();
 }
 
@@ -185,6 +199,7 @@ function addUserMessage(text, attachments = []) {
   msg.appendChild(box);
   messagesEl.appendChild(msg);
   scrollToBottom();
+  return msg;
 }
 
 function fmtDuration(ms) {
@@ -221,6 +236,23 @@ function renderActivityEntry(timeline, items, ev) {
   const label = node.querySelector(".label");
   label.textContent = ev.kind === "reasoning" ? "" : ev.label;
   node.querySelector(".detail").textContent = ev.detail || "";
+  if (ev.imageUrl) {
+    let shot = node.querySelector(".activity-shot");
+    if (!shot) {
+      shot = document.createElement("a");
+      shot.className = "activity-shot";
+      shot.target = "_blank";
+      shot.rel = "noopener";
+      shot.appendChild(document.createElement("img"));
+      node.appendChild(shot);
+    }
+    shot.href = ev.imageUrl;
+    const img = shot.firstChild;
+    if (img.getAttribute("src") !== ev.imageUrl) {
+      img.src = ev.imageUrl;
+      img.alt = ev.detail || "Browser screenshot";
+    }
+  }
   if (ev.output && !node.querySelector(".output")) {
     const toggle = document.createElement("button");
     toggle.className = "output-toggle";
@@ -292,9 +324,20 @@ function renderConversation() {
   messagesEl.innerHTML = "";
   const msgs = currentConv?.messages || [];
   setEmptyState(msgs.length === 0);
-  for (const m of msgs) {
-    if (m.role === "user") addUserMessage(m.text, m.attachments || []);
-    else {
+  // the server can only rewrite a transcript ending in question → answer, so
+  // that is exactly when the regenerate/edit controls are offered
+  const editable = !streaming && msgs.at(-1)?.role === "assistant" && msgs.at(-2)?.role === "user";
+  msgs.forEach((m, i) => {
+    if (m.role === "user") {
+      const msg = addUserMessage(m.text, m.attachments || []);
+      if (editable && i === msgs.length - 2) {
+        const box = msg.querySelector(".msg-box");
+        const bubble = box.querySelector(".bubble");
+        if (bubble) {
+          addMessageActions(box, [["✏️", "Edit message", () => startEditing(box, bubble, m.text)]]);
+        }
+      }
+    } else {
       const msg = document.createElement("div");
       msg.className = "msg assistant";
       if (m.activities?.length) {
@@ -306,11 +349,14 @@ function renderConversation() {
       }
       const content = document.createElement("div");
       content.className = "content";
-      content.appendChild(renderMarkdown(m.text));
+      content.appendChild(renderMarkdown(m.text, { planLive: i === msgs.length - 1 }));
       msg.appendChild(content);
+      if (editable && i === msgs.length - 1) {
+        addMessageActions(msg, [["⟳ Regenerate", "Try this answer again", regenerateLast]]);
+      }
       messagesEl.appendChild(msg);
     }
-  }
+  });
   scrollToBottom();
 }
 
@@ -332,12 +378,24 @@ function newChat() {
 
 async function sendMessage() {
   if (streaming) {
-    streamAbort?.abort();
+    stopTurn();
     return;
   }
   const text = promptInput.value.trim();
   if (!text && pendingAttachments.length === 0) return;
+  ensureNotifyPermission();
 
+  const attachments = pendingAttachments.slice();
+  pendingAttachments = [];
+  attachPreviews.innerHTML = "";
+  promptInput.value = "";
+  autogrow();
+  await postUserTurn({ text, attachments, researchMode: modeForSend() });
+}
+
+// Creates the conversation if needed, echoes the user bubble, then streams.
+// Plan-approval cards call this too (with researchMode/approvedPlan).
+async function postUserTurn({ text, attachments = [], researchMode = "", approvedPlan = [] }) {
   if (!currentConv) {
     currentConv = await fetch("/api/conversations", {
       method: "POST",
@@ -345,25 +403,43 @@ async function sendMessage() {
       body: JSON.stringify({ projectId: selectedProjectId }),
     }).then((r) => r.json());
   }
-  const attachments = pendingAttachments.slice();
-  pendingAttachments = [];
-  attachPreviews.innerHTML = "";
-  promptInput.value = "";
-  autogrow();
   setEmptyState(false);
   addUserMessage(text, attachments);
+  await streamTurn({ text, attachments, researchMode, approvedPlan });
+}
+
+// Cancels the codex turn server-side. The turn's own request saves whatever the
+// agent had written and closes the stream, so we don't abort the fetch here.
+async function stopTurn() {
+  if (!streamConvId) return;
+  try {
+    await fetch(`/api/conversations/${streamConvId}/stop`, { method: "POST" });
+  } catch {
+    streamAbort?.abort(); // server unreachable — at least detach the client
+  }
+}
+
+// Streams one turn into a fresh assistant shell. `replaceLast` ("assistant" to
+// regenerate, "both" to resend an edited question) is passed straight through.
+async function streamTurn({ text = "", attachments = [], replaceLast = "", researchMode = "", approvedPlan = [] }) {
+  const convId = currentConv.id;
+  streamConvId = convId;
+  document.querySelectorAll(".msg-actions").forEach((el) => el.remove());
   const shell = addAssistantShell();
   setStreaming(true);
 
   streamAbort = new AbortController();
-  let gotFinal = false;
+  const state = { final: false, saved: false };
   try {
-    const res = await fetch(`/api/conversations/${currentConv.id}/messages`, {
+    const res = await fetch(`/api/conversations/${convId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, attachments, researchMode: currentMode }),
+      body: JSON.stringify({ text, attachments, researchMode, approvedPlan, replaceLast }),
       signal: streamAbort.signal,
     });
+    if (!res.ok) {
+      throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -378,7 +454,7 @@ async function sendMessage() {
         if (!chunk.startsWith("data: ")) continue;
         let ev;
         try { ev = JSON.parse(chunk.slice(6)); } catch { continue; }
-        handleStreamEvent(ev, shell, () => (gotFinal = true));
+        handleStreamEvent(ev, shell, state);
       }
     }
   } catch (err) {
@@ -388,15 +464,27 @@ async function sendMessage() {
     }
   } finally {
     finalizeShell(shell);
-    if (!gotFinal && shell.content.childNodes.length === 0) {
+    if (!state.final && shell.content.childNodes.length === 0) {
       shell.content.appendChild(renderMarkdown("_(no response)_"));
     }
+    const reply = shell.content.textContent.trim();
     setStreaming(false);
-    loadConversations();
+    await loadConversations();
+    streamConvId = null;
+    // re-read the saved transcript so currentConv (and the regenerate/edit
+    // buttons, which act on its tail) match what the server actually stored
+    if (state.saved && currentConv?.id === convId) {
+      currentConv = await fetch(`/api/conversations/${convId}`).then((r) => r.json());
+      renderConversation();
+    }
+    if (state.saved && document.hidden) {
+      const title = conversations.find((c) => c.id === convId)?.title || "MockChatGPT";
+      notify(title, reply.slice(0, 140) || "Response ready", convId);
+    }
   }
 }
 
-function handleStreamEvent(ev, shell, markFinal) {
+function handleStreamEvent(ev, shell, state) {
   switch (ev.type) {
     case "title":
       loadConversations();
@@ -406,19 +494,94 @@ function handleStreamEvent(ev, shell, markFinal) {
       break;
     case "assistant_delta":
     case "assistant":
+    case "stopped":
       shell.content.innerHTML = "";
       shell.content.appendChild(renderMarkdown(ev.text));
-      if (ev.type === "assistant") markFinal();
+      if (ev.type !== "assistant_delta") state.final = true;
       scrollToBottom();
       break;
     case "error":
       shell.content.appendChild(renderMarkdown(`\n\n⚠️ ${ev.message}`));
       break;
     case "done":
-      markFinal();
+      state.final = true;
+      state.saved = true;
       finalizeShell(shell);
       break;
   }
+}
+
+/* ---------------- regenerate & edit ---------------- */
+
+async function regenerateLast() {
+  if (streaming || !currentConv) return;
+  if (currentConv.messages.at(-1)?.role !== "assistant") return;
+  messagesEl.lastElementChild?.remove(); // the answer the server is about to drop
+  await streamTurn({ replaceLast: "assistant" });
+}
+
+async function resendEdited(newText) {
+  if (streaming || !currentConv) return;
+  const msgs = currentConv.messages;
+  if (msgs.at(-1)?.role !== "assistant" || msgs.at(-2)?.role !== "user") return;
+  const attachments = msgs.at(-2).attachments || [];
+  messagesEl.lastElementChild?.remove(); // old answer
+  messagesEl.lastElementChild?.remove(); // old question
+  addUserMessage(newText, attachments);
+  await streamTurn({ text: newText, replaceLast: "both" });
+}
+
+function addMessageActions(parent, buttons) {
+  const row = document.createElement("div");
+  row.className = "msg-actions";
+  for (const [label, title, onClick] of buttons) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.title = title;
+    b.textContent = label;
+    b.addEventListener("click", onClick);
+    row.appendChild(b);
+  }
+  parent.appendChild(row);
+}
+
+// Swaps the user bubble for a textarea; resending replaces both stored messages.
+function startEditing(box, bubble, text) {
+  box.querySelector(".msg-actions")?.remove();
+  box.classList.add("editing");
+  bubble.remove();
+  const editor = document.createElement("div");
+  editor.className = "msg-editor";
+  const area = document.createElement("textarea");
+  area.rows = Math.min(10, text.split("\n").length + 1);
+  area.value = text;
+  const actions = document.createElement("div");
+  actions.className = "editor-actions";
+  const cancel = document.createElement("button");
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", renderConversation);
+  const send = document.createElement("button");
+  send.className = "primary";
+  send.textContent = "Send";
+  const submit = () => {
+    const next = area.value.trim();
+    if (!next || next === text) return cancel.click();
+    resendEdited(next);
+  };
+  send.addEventListener("click", submit);
+  area.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      submit();
+    } else if (e.key === "Escape") {
+      cancel.click();
+    }
+  });
+  actions.append(cancel, send);
+  editor.append(area, actions);
+  box.appendChild(editor);
+  area.focus();
+  area.setSelectionRange(area.value.length, area.value.length);
 }
 
 function setStreaming(on) {
@@ -530,7 +693,67 @@ $("#settings-btn").addEventListener("click", async () => {
   $("#set-instructions").value = settings.customInstructions || "";
   $("#set-memory-enabled").checked = settings.memoryEnabled !== false;
   $("#set-memory").value = mem.memory || "";
+  $("#memory-optimize-status").textContent = "";
+  refreshMemoryWeekly();
   backdrop.hidden = false;
+});
+
+/* memory "dreaming" — on-demand and weekly rewrites of memory.md */
+
+let memoryTaskSpec = null; // { marker, prompt } from the server
+
+async function getMemoryTaskSpec() {
+  if (!memoryTaskSpec) memoryTaskSpec = await fetch("/api/memory/optimize").then((r) => r.json());
+  return memoryTaskSpec;
+}
+
+async function findMemoryTasks() {
+  const [{ marker }, tasks] = await Promise.all([getMemoryTaskSpec(), fetch("/api/tasks").then((r) => r.json())]);
+  return tasks.filter((t) => t.prompt.includes(marker));
+}
+
+async function refreshMemoryWeekly() {
+  $("#set-memory-weekly").checked = (await findMemoryTasks()).length > 0;
+}
+
+$("#set-memory-weekly").addEventListener("change", async (e) => {
+  const box = e.target;
+  box.disabled = true;
+  const existing = await findMemoryTasks();
+  if (box.checked) {
+    if (!existing.length) {
+      const { prompt } = await getMemoryTaskSpec();
+      await fetch("/api/tasks", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, schedule: { type: "weekly", weekday: 0, time: "05:00" } }),
+      });
+    }
+  } else {
+    for (const t of existing) await fetch(`/api/tasks/${t.id}`, { method: "DELETE" });
+  }
+  box.disabled = false;
+  refreshMemoryWeekly();
+});
+
+$("#memory-optimize").addEventListener("click", async () => {
+  const btn = $("#memory-optimize");
+  const status = $("#memory-optimize-status");
+  btn.disabled = true;
+  btn.textContent = "Optimizing…";
+  status.textContent = "Rewriting memory.md — this can take a minute.";
+  try {
+    const res = await fetch("/api/memory/optimize", { method: "POST" }).then((r) => r.json());
+    if (res.error) {
+      status.textContent = "Failed: " + res.error;
+    } else {
+      $("#set-memory").value = res.memory || "";
+      status.textContent = res.summary;
+    }
+  } catch (err) {
+    status.textContent = "Failed: " + err.message;
+  }
+  btn.disabled = false;
+  btn.textContent = "Optimize memory";
 });
 $("#modal-close").addEventListener("click", () => (backdrop.hidden = true));
 backdrop.addEventListener("click", (e) => {
@@ -608,6 +831,16 @@ document.addEventListener("click", () => (modelMenu.hidden = true));
 let currentMode = "";
 const modeMenu = $("#mode-menu");
 const modeBtn = $("#mode-btn");
+const skipPlanCheck = $("#skip-plan-check");
+const SKIP_PLAN_KEY = "mockchatgpt.skipPlanApproval";
+
+// Research modes plan first ("wide"), then run on approval ("wide-exec").
+// With plan approval skipped we jump straight to the exec protocol.
+function modeForSend() {
+  if (!currentMode) return "";
+  if (currentMode === "heavy") return "heavy"; // heavy runs its own plan phase
+  return skipPlanCheck.checked ? `${currentMode}-exec` : currentMode;
+}
 
 function updateModeUI() {
   const labels = { "": "Research", wide: "Research: Wide", deep: "Research: Deep", heavy: "Research: Heavy" };
@@ -616,6 +849,10 @@ function updateModeUI() {
   modeMenu.querySelectorAll("[data-mode]").forEach((b) =>
     b.classList.toggle("selected", b.dataset.mode === currentMode));
 }
+
+skipPlanCheck.checked = localStorage.getItem(SKIP_PLAN_KEY) === "1";
+skipPlanCheck.addEventListener("change", () =>
+  localStorage.setItem(SKIP_PLAN_KEY, skipPlanCheck.checked ? "1" : "0"));
 modeBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   modeMenu.hidden = !modeMenu.hidden;
@@ -735,8 +972,26 @@ $("#task-type").addEventListener("change", () => {
   }
 });
 
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 function fmtWhen(ts) {
   return ts ? new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+}
+
+function scheduleLabel(s) {
+  switch (s?.type) {
+    case "daily": return `every day at ${s.time}`;
+    case "weekly": return `every ${WEEKDAYS[Number(s.weekday ?? 1)] || "Monday"} at ${s.time}`;
+    case "interval": return `every ${Math.max(5, Number(s.minutes) || 60)} minutes`;
+    case "once": return `once, at ${fmtWhen(new Date(s.at).getTime())}`;
+    default: return "on an unknown schedule";
+  }
+}
+
+// datetime-local wants a local (not UTC) "YYYY-MM-DDTHH:MM" string
+function localDateTimeValue(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 async function refreshTasks() {
@@ -943,6 +1198,268 @@ function buildMcpInstallCard(jsonText) {
   return card;
 }
 
+/* ---------------- skills ---------------- */
+
+let editingSkill = null;
+
+async function refreshSkills() {
+  const skills = await fetch("/api/skills").then((r) => r.json());
+  const list = $("#skill-list");
+  list.innerHTML = skills.length
+    ? ""
+    : '<div class="mcp-note">No skills yet. MockChatGPT teaches itself reusable playbooks as you work — they\'ll appear here. You can edit or delete them.</div>';
+  for (const s of skills) {
+    const row = document.createElement("div");
+    row.className = "skill-row";
+    const grow = document.createElement("div");
+    grow.className = "grow";
+    grow.innerHTML = `<div></div><div class="meta"></div>`;
+    grow.children[0].textContent = s.title || s.slug;
+    grow.children[1].textContent = s.description || s.slug;
+    row.appendChild(grow);
+    const mk = (label, fn, danger) => {
+      const b = document.createElement("button");
+      b.className = "mini-btn" + (danger ? " danger" : "");
+      b.textContent = label;
+      b.addEventListener("click", fn);
+      row.appendChild(b);
+    };
+    mk("View / edit", () => openSkill(s.slug));
+    mk("Delete", async () => {
+      if (!confirm(`Delete the skill "${s.slug}"? MockChatGPT will lose this playbook.`)) return;
+      await fetch(`/api/skills/${s.slug}`, { method: "DELETE" });
+      if (editingSkill === s.slug) closeSkillEditor();
+      refreshSkills();
+    }, true);
+    list.appendChild(row);
+  }
+}
+
+async function openSkill(slug) {
+  const data = await fetch(`/api/skills/${slug}`).then((r) => r.json());
+  if (data.error) return alert(data.error);
+  editingSkill = slug;
+  $("#skill-editor-title").textContent = `${slug}.md`;
+  $("#skill-content").value = data.content;
+  $("#skill-status").textContent = "";
+  $("#skill-editor").hidden = false;
+}
+
+function closeSkillEditor() {
+  editingSkill = null;
+  $("#skill-editor").hidden = true;
+}
+
+$("#skills-btn").addEventListener("click", () => {
+  $("#skills-backdrop").hidden = false;
+  closeSkillEditor();
+  refreshSkills();
+});
+$("#skill-save").addEventListener("click", async () => {
+  if (!editingSkill) return;
+  const res = await fetch(`/api/skills/${editingSkill}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: $("#skill-content").value }),
+  }).then((r) => r.json());
+  if (res.error) return alert(res.error);
+  $("#skill-status").textContent = "Saved ✓";
+  refreshSkills();
+});
+$("#skill-cancel").addEventListener("click", closeSkillEditor);
+
+
+// Editable plan card rendered when the agent proposes a research plan in chat.
+// `live` is false for plans from older messages — those render read-only.
+function buildResearchPlanCard(jsonText, live) {
+  let spec;
+  try {
+    spec = JSON.parse(jsonText.trim());
+  } catch {
+    return null;
+  }
+  const mode = spec?.mode;
+  if ((mode !== "wide" && mode !== "deep") || !Array.isArray(spec.items) || !spec.items.length) return null;
+
+  const card = document.createElement("div");
+  card.className = "mcp-card plan-card";
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = `🔎 Research plan — ${mode === "wide" ? "Wide" : "Deep"}`;
+  const question = document.createElement("div");
+  question.textContent = spec.question || "";
+  const rows = document.createElement("div");
+  rows.className = "plan-rows";
+  const status = document.createElement("div");
+  status.className = "status";
+  card.append(title, question, rows);
+
+  const inputs = [];
+  const addRow = (value, focus) => {
+    const row = document.createElement("div");
+    row.className = "plan-row";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = String(value ?? "");
+    input.disabled = !live;
+    const remove = document.createElement("button");
+    remove.className = "plan-remove";
+    remove.textContent = "✕";
+    remove.title = "Remove this item";
+    remove.addEventListener("click", () => {
+      inputs.splice(inputs.indexOf(input), 1);
+      row.remove();
+    });
+    inputs.push(input);
+    row.appendChild(input);
+    if (live) row.appendChild(remove);
+    rows.appendChild(row);
+    if (focus) input.focus();
+  };
+  spec.items.forEach((item) => addRow(item, false));
+
+  if (Array.isArray(spec.queries) && spec.queries.length) {
+    const queries = document.createElement("div");
+    queries.className = "cmd";
+    queries.textContent = "Planned searches: " + spec.queries.join(" · ");
+    card.appendChild(queries);
+  }
+
+  if (!live) {
+    status.textContent = "Plan expired — the conversation has moved on. Pick a research mode again to plan afresh.";
+    card.appendChild(status);
+    return card;
+  }
+
+  const add = document.createElement("button");
+  add.className = "plan-add";
+  add.textContent = "+ Add item";
+  add.addEventListener("click", () => addRow("", true));
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const start = document.createElement("button");
+  start.className = "primary";
+  start.textContent = "Start research";
+  const cancel = document.createElement("button");
+  cancel.className = "plan-cancel";
+  cancel.textContent = "Cancel";
+
+  const freeze = (msg) => {
+    inputs.forEach((i) => (i.disabled = true));
+    card.querySelectorAll(".plan-remove").forEach((b) => b.remove());
+    add.remove();
+    actions.remove();
+    status.textContent = msg;
+  };
+  start.addEventListener("click", () => {
+    if (streaming) {
+      status.textContent = "Wait for the current turn to finish first.";
+      return;
+    }
+    const items = inputs.map((i) => i.value.trim()).filter(Boolean);
+    if (!items.length) {
+      status.textContent = "Add at least one item before starting.";
+      return;
+    }
+    freeze(`Plan approved ✓ — running ${items.length} ${mode === "wide" ? "angles" : "rounds"}.`);
+    postUserTurn({
+      text: "Start the research using the approved plan.",
+      researchMode: `${mode}-exec`,
+      approvedPlan: items,
+    });
+  });
+  cancel.addEventListener("click", () => freeze("Plan cancelled — ask something else whenever you like."));
+
+  actions.append(start, cancel);
+  card.append(add, actions, status);
+  return card;
+}
+
+// approval card rendered when the agent proposes a scheduled task in chat
+function buildTaskCreateCard(jsonText) {
+  let spec;
+  try {
+    spec = JSON.parse(jsonText.trim());
+  } catch {
+    return null;
+  }
+  const type = spec?.schedule?.type;
+  if (!spec?.prompt || !["daily", "weekly", "interval", "once"].includes(type)) return null;
+
+  const card = document.createElement("div");
+  card.className = "mcp-card";
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = "⏰ Scheduled task proposal";
+  const reason = document.createElement("div");
+  reason.textContent = spec.reason || "";
+  const prompt = document.createElement("div");
+  prompt.className = "cmd";
+  prompt.textContent = spec.prompt;
+  card.append(title, reason, prompt);
+
+  // the one part of the schedule worth tweaking before approving
+  const when = document.createElement("div");
+  when.className = "when";
+  const label = document.createElement("span");
+  const field = document.createElement("input");
+  const unit = document.createElement("span");
+  if (type === "interval") {
+    label.textContent = "Every";
+    field.type = "number";
+    field.min = "5";
+    field.style.width = "80px";
+    field.value = String(Math.max(5, Number(spec.schedule.minutes) || 60));
+    unit.textContent = "minutes";
+  } else if (type === "once") {
+    label.textContent = "Once, at";
+    field.type = "datetime-local";
+    const at = new Date(spec.schedule.at);
+    field.value = isNaN(at.getTime()) ? "" : localDateTimeValue(at);
+  } else {
+    label.textContent = type === "weekly" ? `Every ${WEEKDAYS[Number(spec.schedule.weekday ?? 1)] || "Monday"} at` : "Every day at";
+    field.type = "time";
+    field.value = /^\d{1,2}:\d{2}$/.test(spec.schedule.time || "") ? spec.schedule.time : "09:00";
+  }
+  when.append(label, field, unit);
+  card.appendChild(when);
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const approve = document.createElement("button");
+  approve.className = "primary";
+  approve.textContent = "Approve & schedule";
+  const status = document.createElement("div");
+  status.className = "status";
+  approve.addEventListener("click", async () => {
+    const schedule = { type };
+    if (type === "interval") {
+      schedule.minutes = Math.max(5, Number(field.value) || 60);
+    } else if (type === "once") {
+      if (!field.value) return void (status.textContent = "Pick a date and time first.");
+      schedule.at = new Date(field.value).toISOString();
+    } else {
+      schedule.time = field.value;
+      if (type === "weekly") schedule.weekday = Number(spec.schedule.weekday ?? 1);
+    }
+    approve.disabled = true;
+    status.textContent = "Scheduling…";
+    const res = await fetch("/api/tasks", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: spec.prompt, schedule }),
+    }).then((r) => r.json());
+    if (res.error) {
+      status.textContent = "Failed: " + res.error;
+      approve.disabled = false;
+      return;
+    }
+    status.textContent = `Scheduled ✓ — ${scheduleLabel(res.schedule)}, first run ${fmtWhen(res.nextRun)}. Manage it under "Scheduled tasks".`;
+    loadConversations();
+  });
+  actions.appendChild(approve);
+  card.append(actions, status);
+  return card;
+}
+
 /* ---------------- generic modal close ---------------- */
 
 document.querySelectorAll(".modal-x[data-close]").forEach((b) =>
@@ -951,6 +1468,57 @@ document.querySelectorAll(".backdrop").forEach((bd) =>
   bd.addEventListener("click", (e) => {
     if (e.target === bd) bd.hidden = true;
   }));
+
+/* ---------------- desktop notifications ---------------- */
+
+const TASK_PREFIX = "⏰";
+let notifyAsked = false;
+let taskStamps = null; // id → updatedAt for task chats; null until the first load
+
+// Asked on the first send rather than at load, so the prompt has context.
+function ensureNotifyPermission() {
+  if (notifyAsked || !("Notification" in window)) return;
+  notifyAsked = true;
+  if (Notification.permission === "default") Notification.requestPermission().catch(() => {});
+}
+
+function notify(title, body, convId) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  let n;
+  try {
+    n = new Notification(title, { body, tag: convId || "mockchatgpt" });
+  } catch {
+    return; // some browsers only allow notifications from a service worker
+  }
+  n.addEventListener("click", () => {
+    window.focus();
+    n.close();
+    if (convId) openConversation(convId);
+  });
+}
+
+// Scheduled runs land server-side with no stream attached, so they are spotted
+// by watching the updatedAt of "⏰" chats across conversation-list refreshes.
+function detectTaskRuns() {
+  const stamps = new Map();
+  for (const c of conversations) {
+    if (c.title.startsWith(TASK_PREFIX)) stamps.set(c.id, c.updatedAt);
+  }
+  if (taskStamps) {
+    for (const [id, updatedAt] of stamps) {
+      const prev = taskStamps.get(id);
+      if (prev !== undefined && updatedAt <= prev) continue;
+      if (id === streamConvId) continue; // our own turn, not a scheduled run
+      if (!document.hidden && currentConv?.id === id) continue; // already looking at it
+      notify("Scheduled task finished", conversations.find((c) => c.id === id).title, id);
+    }
+  }
+  taskStamps = stamps;
+}
+
+setInterval(() => {
+  if (document.hidden && !streaming) loadConversations();
+}, 60000);
 
 /* ---------------- misc ---------------- */
 

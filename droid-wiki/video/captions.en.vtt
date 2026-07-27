@@ -1,0 +1,511 @@
+WEBVTT
+
+00:00:00.900 --> 00:00:02.240
+What if you could run
+
+00:00:02.240 --> 00:00:03.451
+a ChatGPT-style app
+
+00:00:03.451 --> 00:00:04.663
+on the subscription
+
+00:00:04.663 --> 00:00:05.939
+you already pay for?
+
+00:00:06.339 --> 00:00:07.944
+That is exactly what
+
+00:00:07.944 --> 00:00:09.307
+MockChatGPT does.
+
+00:00:09.707 --> 00:00:11.629
+It is a familiar chat interface,
+
+00:00:11.629 --> 00:00:12.589
+with a genuinely
+
+00:00:12.589 --> 00:00:14.150
+agentic engine underneath.
+
+00:00:15.350 --> 00:00:16.681
+The idea is simple.
+
+00:00:17.081 --> 00:00:18.950
+Wrap the OpenAI Codex agent
+
+00:00:18.950 --> 00:00:20.542
+behind a chat interface
+
+00:00:20.542 --> 00:00:21.719
+you already know.
+
+00:00:22.119 --> 00:00:23.426
+Because it signs in
+
+00:00:23.426 --> 00:00:24.802
+through codex login,
+
+00:00:24.802 --> 00:00:25.903
+every turn bills
+
+00:00:25.903 --> 00:00:27.554
+to your ChatGPT account.
+
+00:00:27.954 --> 00:00:29.419
+There is no API key,
+
+00:00:29.419 --> 00:00:31.177
+and no per-token charge.
+
+00:00:31.577 --> 00:00:33.705
+Codex ships the hard parts,
+
+00:00:33.705 --> 00:00:35.439
+and MockChatGPT builds
+
+00:00:35.439 --> 00:00:37.331
+the product around them.
+
+00:00:38.531 --> 00:00:38.956
+First,
+
+00:00:38.956 --> 00:00:40.654
+the shape of the system.
+
+00:00:41.054 --> 00:00:42.235
+There are three layers.
+
+00:00:42.635 --> 00:00:44.418
+A vanilla JavaScript app
+
+00:00:44.418 --> 00:00:46.350
+talks to an Express server
+
+00:00:46.350 --> 00:00:48.133
+over server-sent events.
+
+00:00:48.533 --> 00:00:49.805
+The server drives
+
+00:00:49.805 --> 00:00:51.002
+the Codex agent,
+
+00:00:51.002 --> 00:00:53.247
+running the local codex binary
+
+00:00:53.247 --> 00:00:54.370
+against OpenAI.
+
+00:00:54.770 --> 00:00:56.778
+State lives in two folders:
+
+00:00:56.778 --> 00:00:58.042
+data for records,
+
+00:00:58.042 --> 00:01:00.273
+and workspace for the sandbox.
+
+00:01:01.473 --> 00:01:02.279
+The server is
+
+00:01:02.279 --> 00:01:03.456
+deliberately small.
+
+00:01:03.856 --> 00:01:04.795
+Six modules,
+
+00:01:04.795 --> 00:01:07.223
+under nine hundred lines total.
+
+00:01:07.623 --> 00:01:09.075
+The index module holds
+
+00:01:09.075 --> 00:01:09.801
+the routes,
+
+00:01:09.801 --> 00:01:11.253
+and the chat endpoint.
+
+00:01:11.653 --> 00:01:13.069
+The codex client maps
+
+00:01:13.069 --> 00:01:13.879
+agent events
+
+00:01:13.879 --> 00:01:15.632
+into simple stream events.
+
+00:01:16.032 --> 00:01:18.385
+Prompts builds the persona,
+
+00:01:18.385 --> 00:01:20.998
+and store handles persistence.
+
+00:01:21.398 --> 00:01:23.863
+A scheduler runs timed tasks,
+
+00:01:23.863 --> 00:01:25.817
+and a connectors module
+
+00:01:25.817 --> 00:01:27.771
+manages external tools.
+
+00:01:28.971 --> 00:01:29.401
+Next,
+
+00:01:29.401 --> 00:01:31.461
+follow a single message.
+
+00:01:31.861 --> 00:01:33.487
+The browser posts your text
+
+00:01:33.487 --> 00:01:34.993
+to the messages endpoint.
+
+00:01:35.393 --> 00:01:37.005
+The server saves it,
+
+00:01:37.005 --> 00:01:38.456
+builds the prompt,
+
+00:01:38.456 --> 00:01:39.987
+and opens a stream.
+
+00:01:40.387 --> 00:01:41.933
+It then calls run turn,
+
+00:01:41.933 --> 00:01:44.017
+which streams the Codex thread.
+
+00:01:44.417 --> 00:01:45.784
+As the agent works,
+
+00:01:45.784 --> 00:01:47.296
+each event flows back
+
+00:01:47.296 --> 00:01:48.591
+as a stream frame.
+
+00:01:48.991 --> 00:01:50.378
+When the turn finishes,
+
+00:01:50.378 --> 00:01:51.524
+the reply is saved,
+
+00:01:51.524 --> 00:01:53.031
+and a done event is sent.
+
+00:01:54.231 --> 00:01:55.233
+Here is a detail
+
+00:01:55.233 --> 00:01:56.047
+that matters.
+
+00:01:56.447 --> 00:01:57.779
+Codex emits several
+
+00:01:57.779 --> 00:01:59.462
+whole messages per turn,
+
+00:01:59.462 --> 00:02:01.074
+not token-level deltas.
+
+00:02:01.474 --> 00:02:02.788
+So the pipeline
+
+00:02:02.788 --> 00:02:04.276
+accumulates them,
+
+00:02:04.276 --> 00:02:05.852
+not just the last.
+
+00:02:06.252 --> 00:02:07.992
+Every action becomes
+
+00:02:07.992 --> 00:02:09.558
+an activity event:
+
+00:02:09.558 --> 00:02:11.298
+reasoning, commands,
+
+00:02:11.298 --> 00:02:13.038
+searches, and edits.
+
+00:02:13.438 --> 00:02:15.078
+The interface replays these
+
+00:02:15.078 --> 00:02:16.778
+as a live thinking timeline.
+
+00:02:17.978 --> 00:02:18.973
+So what can it
+
+00:02:18.973 --> 00:02:19.825
+actually do?
+
+00:02:20.225 --> 00:02:22.295
+The familiar ChatGPT surface
+
+00:02:22.295 --> 00:02:23.182
+is all here.
+
+00:02:23.582 --> 00:02:25.746
+Streaming chat with markdown,
+
+00:02:25.746 --> 00:02:27.685
+web search with citations,
+
+00:02:27.685 --> 00:02:29.401
+and a code interpreter.
+
+00:02:29.801 --> 00:02:31.620
+It understands images,
+
+00:02:31.620 --> 00:02:33.026
+reads your files,
+
+00:02:33.026 --> 00:02:35.590
+and generates images from code.
+
+00:02:35.990 --> 00:02:36.996
+The key point:
+
+00:02:36.996 --> 00:02:38.074
+one Codex agent
+
+00:02:38.074 --> 00:02:39.296
+powers all of it.
+
+00:02:40.496 --> 00:02:41.639
+Two research modes
+
+00:02:41.639 --> 00:02:43.290
+go beyond a normal answer.
+
+00:02:43.690 --> 00:02:44.260
+Wide runs
+
+00:02:44.260 --> 00:02:45.652
+a breadth-first sweep.
+
+00:02:46.052 --> 00:02:47.977
+At least eight queries,
+
+00:02:47.977 --> 00:02:50.320
+and fifteen or more sources.
+
+00:02:50.720 --> 00:02:52.496
+Deep goes the other way,
+
+00:02:52.496 --> 00:02:53.975
+in iterative rounds.
+
+00:02:54.375 --> 00:02:56.378
+It writes notes to a file,
+
+00:02:56.378 --> 00:02:57.611
+then chases each
+
+00:02:57.611 --> 00:02:59.537
+round's findings further.
+
+00:03:00.737 --> 00:03:02.444
+Where does everything persist?
+
+00:03:02.844 --> 00:03:04.466
+Each conversation maps
+
+00:03:04.466 --> 00:03:05.941
+to one Codex thread,
+
+00:03:05.941 --> 00:03:06.973
+resumed by id.
+
+00:03:07.373 --> 00:03:08.966
+So context survives
+
+00:03:08.966 --> 00:03:10.392
+a server restart.
+
+00:03:10.792 --> 00:03:13.203
+Chats, settings, projects,
+
+00:03:13.203 --> 00:03:14.872
+and tasks are JSON
+
+00:03:14.872 --> 00:03:15.892
+under data.
+
+00:03:16.292 --> 00:03:18.554
+Uploads, generated files,
+
+00:03:18.554 --> 00:03:19.459
+and memory
+
+00:03:19.459 --> 00:03:21.360
+live under workspace.
+
+00:03:22.560 --> 00:03:24.163
+Connectors extend the agent
+
+00:03:24.163 --> 00:03:25.945
+through external tool servers.
+
+00:03:26.345 --> 00:03:28.427
+A catalog ships eight picks,
+
+00:03:28.427 --> 00:03:29.542
+from Playwright
+
+00:03:29.542 --> 00:03:31.251
+to document conversion.
+
+00:03:31.651 --> 00:03:33.392
+Installs run safely,
+
+00:03:33.392 --> 00:03:35.219
+with array arguments,
+
+00:03:35.219 --> 00:03:37.394
+never a raw shell string.
+
+00:03:37.794 --> 00:03:39.750
+The agent can propose one
+
+00:03:39.750 --> 00:03:40.376
+in chat,
+
+00:03:40.376 --> 00:03:41.549
+and you approve
+
+00:03:41.549 --> 00:03:42.722
+with one click.
+
+00:03:43.922 --> 00:03:45.220
+Two features make it
+
+00:03:45.220 --> 00:03:46.647
+feel like a workspace.
+
+00:03:47.047 --> 00:03:48.595
+Scheduled tasks run
+
+00:03:48.595 --> 00:03:50.144
+on interval, daily,
+
+00:03:50.144 --> 00:03:51.448
+weekly, or once.
+
+00:03:51.848 --> 00:03:52.912
+Every run is
+
+00:03:52.912 --> 00:03:54.509
+a real agent turn,
+
+00:03:54.509 --> 00:03:55.929
+in its own chat.
+
+00:03:56.329 --> 00:03:57.533
+Projects group chats
+
+00:03:57.533 --> 00:03:58.376
+with their own
+
+00:03:58.376 --> 00:03:59.761
+instructions and files.
+
+00:04:00.961 --> 00:04:01.302
+Now,
+
+00:04:01.302 --> 00:04:03.091
+the important caveat.
+
+00:04:03.491 --> 00:04:05.221
+This is single-user,
+
+00:04:05.221 --> 00:04:06.865
+and localhost-only.
+
+00:04:07.265 --> 00:04:09.261
+The agent has write access
+
+00:04:09.261 --> 00:04:10.489
+and the network,
+
+00:04:10.489 --> 00:04:12.101
+and there is no auth.
+
+00:04:12.501 --> 00:04:13.732
+Exposing the port
+
+00:04:13.732 --> 00:04:15.253
+would hand a stranger
+
+00:04:15.253 --> 00:04:16.774
+control of the agent.
+
+00:04:17.174 --> 00:04:18.798
+File names and ids
+
+00:04:18.798 --> 00:04:20.062
+are validated,
+
+00:04:20.062 --> 00:04:22.409
+and markdown is sanitized.
+
+00:04:23.609 --> 00:04:24.746
+The whole project
+
+00:04:24.746 --> 00:04:26.218
+is remarkably compact.
+
+00:04:26.618 --> 00:04:28.744
+About 3,200 lines,
+
+00:04:28.744 --> 00:04:30.751
+six dependencies,
+
+00:04:30.751 --> 00:04:32.523
+and zero tests.
+
+00:04:32.923 --> 00:04:34.714
+Built in a single day,
+
+00:04:34.714 --> 00:04:36.424
+across seven commits.
+
+00:04:36.824 --> 00:04:39.924
+The frontend is one script,
+
+00:04:39.924 --> 00:04:41.072
+965 lines,
+
+00:04:41.072 --> 00:04:42.565
+no framework.
+
+00:04:43.765 --> 00:04:44.740
+So remember it
+
+00:04:44.740 --> 00:04:45.367
+this way.
+
+00:04:45.767 --> 00:04:48.396
+A full ChatGPT-style product,
+
+00:04:48.396 --> 00:04:51.296
+wrapped around the Codex engine.
+
+00:04:51.696 --> 00:04:53.229
+A thin server,
+
+00:04:53.229 --> 00:04:54.982
+a lean frontend,
+
+00:04:54.982 --> 00:04:57.391
+and a sandboxed agent.
+
+00:04:57.791 --> 00:04:59.147
+All on the subscription
+
+00:04:59.147 --> 00:05:00.149
+you already have.

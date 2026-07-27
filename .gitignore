@@ -5,5 +5,12 @@ workspace/generated/
 workspace/notes/
 workspace/research_notes.md
 workspace/memory.md
+# browser-tool debris (screenshots the agent keeps are copied into generated/)
+workspace/.playwright-mcp/
+workspace/.playwright-cli/
+workspace/output/
+workspace/skills/*.md
+!workspace/skills/INDEX.md
 .DS_Store
 *.log
+.factory/
