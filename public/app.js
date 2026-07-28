@@ -77,6 +77,7 @@ async function loadConversations() {
   conversations = await fetch("/api/conversations").then((r) => r.json());
   detectTaskRuns();
   renderConvList();
+  updateBranchButton();
 }
 
 function groupLabel(ts) {
@@ -110,6 +111,13 @@ function renderConvList() {
     item.className = "conv-item" + (currentConv?.id === c.id ? " active" : "");
     const title = document.createElement("span");
     title.className = "conv-title";
+    if (c.parentId) {
+      const fork = document.createElement("span");
+      fork.className = "conv-fork";
+      fork.textContent = "⑂";
+      fork.title = "Branched chat";
+      item.appendChild(fork);
+    }
     title.textContent = c.title;
     const menuBtn = document.createElement("button");
     menuBtn.className = "conv-menu-btn";
@@ -370,6 +378,9 @@ function renderConversation() {
       if (editable && i === msgs.length - 1) {
         actions.push(["⟳ Regenerate", "Try this answer again", regenerateLast]);
       }
+      if (!streaming) {
+        actions.push(["⑂ Branch", "Start a new chat that continues from here", () => branchFrom(i)]);
+      }
       if (canAudit(m)) {
         actions.push([
           m.audit ? "✔ Re-verify" : "✔ Verify",
@@ -391,6 +402,7 @@ async function openConversation(id) {
   currentConv = await fetch(`/api/conversations/${id}`).then((r) => r.json());
   renderConvList();
   renderConversation();
+  updateBranchButton();
 }
 
 function newChat() {
@@ -398,6 +410,7 @@ function newChat() {
   messagesEl.innerHTML = "";
   setEmptyState(true);
   renderConvList();
+  updateBranchButton();
   promptInput.focus();
 }
 
@@ -647,6 +660,279 @@ function setStreaming(on) {
   sendIcon.style.display = on ? "none" : "";
   stopIcon.style.display = on ? "" : "none";
   if (on) sendBtn.disabled = false;
+}
+
+/* ---------------- branch explorer ---------------- */
+
+// A branch family is a root conversation plus everything forked from it,
+// reconstructed client-side from the conversation list (which carries
+// parentId/forkOfIndex/branchLabel/messageCount for exactly this).
+const branchBackdrop = $("#branch-backdrop");
+let diffSelection = []; // ids ticked for side-by-side comparison (max 2)
+
+const convMeta = (id) => conversations.find((c) => c.id === id) || null;
+const branchName = (c) => (c.branchLabel || c.title || "Untitled");
+
+// Deleting a parent leaves its children pointing at an id that no longer
+// exists; such a child is simply treated as a root.
+function rootOf(id) {
+  let node = convMeta(id);
+  const seen = new Set();
+  while (node?.parentId && !seen.has(node.id)) {
+    seen.add(node.id);
+    const parent = convMeta(node.parentId);
+    if (!parent) break;
+    node = parent;
+  }
+  return node;
+}
+
+const childrenOf = (id) =>
+  conversations.filter((c) => c.parentId === id).sort((a, b) => a.createdAt - b.createdAt);
+
+// Depth-first walk of the whole family: [{ conv, depth }], root first.
+function familyOf(id) {
+  const root = rootOf(id);
+  if (!root) return [];
+  const out = [];
+  const seen = new Set();
+  (function walk(node, depth) {
+    if (seen.has(node.id)) return;
+    seen.add(node.id);
+    out.push({ conv: node, depth });
+    for (const child of childrenOf(node.id)) walk(child, depth + 1);
+  })(root, 0);
+  return out;
+}
+
+// The topbar entry point only appears once a conversation actually has kin.
+function updateBranchButton() {
+  const size = currentConv ? familyOf(currentConv.id).length : 0;
+  $("#branches-btn").hidden = size < 2;
+  $("#branches-count").textContent = size >= 2 ? String(size) : "";
+}
+
+async function branchFrom(messageIndex) {
+  if (streaming || !currentConv) return;
+  const label = prompt("Name this branch (optional)", "");
+  if (label === null) return;
+  const res = await fetch(`/api/conversations/${currentConv.id}/branch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messageIndex, label }),
+  }).then((r) => r.json());
+  if (res.error) return alert(res.error);
+  await loadConversations();
+  await openConversation(res.id);
+  promptInput.focus();
+}
+
+$("#branches-btn").addEventListener("click", () => {
+  diffSelection = [];
+  branchBackdrop.hidden = false;
+  renderBranchTree();
+  renderBranchDiff();
+});
+
+function renderBranchTree() {
+  const treeEl = $("#branch-tree");
+  treeEl.innerHTML = "";
+  const family = currentConv ? familyOf(currentConv.id) : [];
+  if (!family.length) {
+    treeEl.innerHTML = '<div class="mcp-note">This chat has no branches.</div>';
+    return;
+  }
+  for (const { conv: c, depth } of family) {
+    const row = document.createElement("div");
+    row.className = "branch-row";
+    row.style.paddingLeft = depth * 20 + "px";
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.title = "Compare this branch";
+    check.checked = diffSelection.includes(c.id);
+    check.addEventListener("change", () => toggleDiffSelection(c.id));
+    row.appendChild(check);
+    if (depth) {
+      const rail = document.createElement("span");
+      rail.className = "b-rail";
+      rail.textContent = "└";
+      row.appendChild(rail);
+    }
+    const node = document.createElement("button");
+    node.type = "button";
+    node.className = "branch-node" + (c.id === currentConv?.id ? " current" : "");
+    const grow = document.createElement("div");
+    grow.className = "grow";
+    const title = document.createElement("div");
+    title.className = "b-title";
+    const name = document.createElement("span");
+    name.textContent = (c.parentId ? "⑂ " : "") + branchName(c);
+    title.appendChild(name);
+    if (c.id === currentConv?.id) {
+      const here = document.createElement("span");
+      here.className = "b-here";
+      here.textContent = "open";
+      title.appendChild(here);
+    }
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent =
+      `${c.messageCount} message${c.messageCount === 1 ? "" : "s"} · ${fmtWhen(c.updatedAt)}` +
+      (Number.isInteger(c.forkOfIndex) ? ` · forked at message ${c.forkOfIndex + 1}` : "") +
+      (c.parentId && !convMeta(c.parentId) ? " · original chat deleted" : "");
+    grow.append(title, meta);
+    node.appendChild(grow);
+    node.addEventListener("click", () => {
+      branchBackdrop.hidden = true;
+      openConversation(c.id);
+    });
+    row.appendChild(node);
+    treeEl.appendChild(row);
+  }
+}
+
+function toggleDiffSelection(id) {
+  const at = diffSelection.indexOf(id);
+  if (at >= 0) diffSelection.splice(at, 1);
+  else if (diffSelection.push(id) > 2) diffSelection.shift(); // keep the two newest picks
+  renderBranchTree();
+  renderBranchDiff();
+}
+
+const lastAssistantText = (conv) =>
+  [...(conv.messages || [])].reverse().find((m) => m.role === "assistant")?.text || "";
+
+async function renderBranchDiff() {
+  const el = $("#branch-diff");
+  if (diffSelection.length !== 2) {
+    el.innerHTML = diffSelection.length
+      ? '<div class="mcp-note">Tick one more branch to compare their latest answers.</div>'
+      : "";
+    return;
+  }
+  const ids = diffSelection.slice();
+  el.innerHTML = '<div class="mcp-note">Loading…</div>';
+  const convs = await Promise.all(
+    ids.map((id) => fetch(`/api/conversations/${id}`).then((r) => r.json())));
+  if (diffSelection.join() !== ids.join()) return; // ticked something else while loading
+  const [aText, bText] = convs.map(lastAssistantText);
+  const ops = wordDiff(aText, bText);
+  const changed = ops
+    .filter((o) => o.type !== "same")
+    .reduce((n, o) => n + o.tokens.filter((t) => t.trim()).length, 0);
+
+  el.innerHTML = "";
+  const head = document.createElement("h3");
+  head.textContent = "Latest answer, side by side";
+  const note = document.createElement("div");
+  note.className = "mcp-note";
+  note.textContent = !aText || !bText
+    ? "One of these branches hasn't answered anything yet."
+    : changed === 0
+      ? "The two answers are identical."
+      : `${changed} words differ — removed on the left, added on the right.`;
+  const panes = document.createElement("div");
+  panes.className = "diff-panes";
+  panes.append(diffPane(convs[0], ops, "del"), diffPane(convs[1], ops, "add"));
+  el.append(head, note, panes);
+}
+
+function diffPane(conv, ops, side) {
+  const pane = document.createElement("div");
+  pane.className = "diff-pane";
+  const label = document.createElement("div");
+  label.className = "d-label";
+  label.textContent = (conv.parentId ? "⑂ " : "") + branchName(conv);
+  const text = document.createElement("div");
+  text.className = "d-text";
+  for (const op of ops) {
+    if (op.type === "same") text.appendChild(document.createTextNode(op.tokens.join("")));
+    else if (op.type === side) {
+      const mark = document.createElement(side === "del" ? "del" : "ins");
+      mark.textContent = op.tokens.join("");
+      text.appendChild(mark);
+    }
+  }
+  if (!text.textContent.trim()) text.textContent = "(no answer in this branch yet)";
+  pane.append(label, text);
+  return pane;
+}
+
+/* --- word-level diff (LCS), no dependencies --- */
+
+// Tokens keep their whitespace, so joining a run of them restores the original
+// text verbatim. Above this many DP cells (~16MB) the texts are too far apart
+// to be worth aligning and the differing middles are shown wholesale.
+const DIFF_CELL_LIMIT = 4_000_000;
+
+const tokenizeWords = (s) => String(s || "").split(/(\s+)/).filter((t) => t !== "");
+
+// → [{ type: "same"|"del"|"add", tokens }]: same+del rebuilds the left text,
+// same+add the right one.
+function wordDiff(aText, bText) {
+  const a = tokenizeWords(aText);
+  const b = tokenizeWords(bText);
+  // two answers to the same question usually share a long head and tail;
+  // peeling those off first keeps the O(n·m) table small
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (
+    tail < a.length - head &&
+    tail < b.length - head &&
+    a[a.length - 1 - tail] === b[b.length - 1 - tail]
+  ) tail++;
+  const aMid = a.slice(head, a.length - tail);
+  const bMid = b.slice(head, b.length - tail);
+
+  const ops = [];
+  const push = (type, tokens) => {
+    if (!tokens.length) return;
+    const last = ops.at(-1);
+    if (last?.type === type) last.tokens.push(...tokens);
+    else ops.push({ type, tokens: [...tokens] });
+  };
+  push("same", a.slice(0, head));
+  if (aMid.length * bMid.length > DIFF_CELL_LIMIT) {
+    push("del", aMid);
+    push("add", bMid);
+  } else {
+    for (const op of lcsDiff(aMid, bMid)) push(op.type, op.tokens);
+  }
+  push("same", a.slice(a.length - tail));
+  return ops;
+}
+
+function lcsDiff(a, b) {
+  const n = a.length;
+  const m = b.length;
+  const width = m + 1;
+  // lcs[i][j] = length of the longest common subsequence of a[i…] and b[j…]
+  const lcs = new Uint32Array((n + 1) * width);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i * width + j] =
+        a[i] === b[j]
+          ? lcs[(i + 1) * width + j + 1] + 1
+          : Math.max(lcs[(i + 1) * width + j], lcs[i * width + j + 1]);
+    }
+  }
+  const ops = [];
+  const push = (type, token) => {
+    const last = ops.at(-1);
+    if (last?.type === type) last.tokens.push(token);
+    else ops.push({ type, tokens: [token] });
+  };
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { push("same", a[i]); i++; j++; }
+    else if (lcs[(i + 1) * width + j] >= lcs[i * width + j + 1]) push("del", a[i++]);
+    else push("add", b[j++]);
+  }
+  while (i < n) push("del", a[i++]);
+  while (j < m) push("add", b[j++]);
+  return ops;
 }
 
 /* ---------------- claim audit ---------------- */

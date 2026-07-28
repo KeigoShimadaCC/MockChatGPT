@@ -83,6 +83,9 @@
           </div>
         </div>
         <div class="topbar-spacer"></div>
+        <button id="branches-btn" title="Show this conversation's branch tree" hidden>
+          <span class="fork-glyph">⑂</span> Branches <span id="branches-count"></span>
+        </button>
       </header>
 
       <div id="chat-scroll">
@@ -213,6 +216,18 @@
               <span id="skill-status" class="meta"></span>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Branch explorer modal -->
+    <div id="branch-backdrop" class="backdrop" hidden>
+      <div class="modal branch-modal">
+        <div class="modal-header"><h2><span class="fork-glyph">⑂</span> Branches</h2><button class="modal-x" data-close="branch-backdrop">✕</button></div>
+        <div class="modal-body">
+          <div class="mcp-note">Every chat forked from this one, and the chat they came from. Click a branch to open it; tick two to compare their latest answers.</div>
+          <div id="branch-tree"></div>
+          <div id="branch-diff"></div>
         </div>
       </div>
     </div>

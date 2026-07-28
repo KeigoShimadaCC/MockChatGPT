@@ -11,6 +11,7 @@ import {
   getConversation,
   saveConversation,
   createConversation,
+  branchConversation,
   deleteConversation,
   readMemory,
   writeMemory,
@@ -21,7 +22,7 @@ import {
   updateProject,
   deleteProject,
 } from "./store.js";
-import { buildPreamble, researchProtocol, memoryOptimizePrompt, MEMORY_TASK_MARKER, AUDIT_MIN_CHARS } from "./prompts.js";
+import { buildPreamble, branchSeed, researchProtocol, memoryOptimizePrompt, MEMORY_TASK_MARKER, AUDIT_MIN_CHARS } from "./prompts.js";
 import { getThread, runTurn } from "./codexClient.js";
 import { runHeavyResearch } from "./heavyResearch.js";
 import { runClaimAudit } from "./claimAudit.js";
@@ -176,6 +177,15 @@ app.delete("/api/conversations/:id", (req, res) => {
   deleteConversation(req.params.id);
   res.json({ ok: true });
 });
+// Fork a conversation at a message: the child copies messages[0..messageIndex]
+// and gets its own (initially absent) codex thread.
+app.post("/api/conversations/:id/branch", (req, res) => {
+  try {
+    res.json(branchConversation(req.params.id, req.body || {}));
+  } catch (e) {
+    res.status(e.message === "conversation not found" ? 404 : 400).json({ error: e.message });
+  }
+});
 
 // ---------- uploads ----------
 const projectUpload = multer({
@@ -292,6 +302,16 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
     return res.status(400).json({ error: "empty message" });
   }
 
+  // A branch starts on a fresh Codex thread, which knows nothing of the
+  // transcript it inherited, so that transcript is replayed into its first
+  // turn. Snapshot it here: the block below rewrites conv.messages, and an
+  // edit/regenerate as the branch's very first action would otherwise leave a
+  // truncated (or doubled) replay.
+  const seedNow = !conv.threadId && !!conv.seedPending;
+  const seedMessages = seedNow
+    ? conv.messages.slice(0, Number.isInteger(conv.forkOfIndex) ? conv.forkOfIndex + 1 : conv.messages.length)
+    : [];
+
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -326,6 +346,7 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   const isFirstTurn = !conv.threadId;
   let promptText = "";
   if (isFirstTurn) promptText += buildPreamble(conv.projectId) + "\n\n";
+  if (seedMessages.length) promptText += branchSeed(seedMessages) + "\n\n";
   promptText += researchProtocol(researchMode, approvedPlan);
   const nonImageFiles = attachments.filter((a) => !a.isImage);
   if (nonImageFiles.length) {
@@ -393,6 +414,7 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
 
 _(stopped)_` : "_(stopped)_") : finalText;
     conv.threadId = threadId || conv.threadId;
+    if (seedNow && conv.threadId) conv.seedPending = false;
     const assistantMsg = {
       role: "assistant",
       text: answer,
