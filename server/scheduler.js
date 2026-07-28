@@ -3,6 +3,7 @@ import path from "path";
 import { DATA_DIR, getConversation, saveConversation, createConversation } from "./store.js";
 import { buildPreamble } from "./prompts.js";
 import { getThread, runTurn } from "./codexClient.js";
+import { logUsage } from "./usage.js";
 
 const TASKS_FILE = path.join(DATA_DIR, "tasks.json");
 
@@ -95,11 +96,18 @@ export async function runTask(id) {
   saveConversation(conv);
 
   const activities = [];
+  let usage = null;
   const emit = (ev) => {
     if (ev.type === "activity") {
       const existing = ev.id && activities.find((a) => a.id === ev.id && a.kind === ev.kind);
       if (existing) Object.assign(existing, ev);
       else activities.push({ ...ev });
+    }
+    if (ev.type === "usage" && ev.usage) {
+      usage = usage || {};
+      for (const [k, v] of Object.entries(ev.usage)) {
+        if (typeof v === "number") usage[k] = (usage[k] || 0) + v;
+      }
     }
   };
 
@@ -111,8 +119,18 @@ export async function runTask(id) {
     const thread = getThread(conv.threadId);
     const { threadId, finalText } = await runTurn(thread, input, emit);
     conv.threadId = threadId || conv.threadId;
-    conv.messages.push({ role: "assistant", text: finalText, activities, durationMs: Date.now() - startedAt, ts: Date.now() });
+    conv.messages.push({
+      role: "assistant",
+      text: finalText,
+      activities,
+      durationMs: Date.now() - startedAt,
+      ...(usage ? { usage } : {}),
+      ts: Date.now(),
+    });
     saveConversation(conv);
+    if (usage) {
+      logUsage({ ts: Date.now(), conversationId: conv.id, model: "scheduled", researchMode: "scheduled", durationMs: Date.now() - startedAt, ...usage });
+    }
     updateTask(task.id, {
       conversationId: conv.id,
       lastRun: Date.now(),

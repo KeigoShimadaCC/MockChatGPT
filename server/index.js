@@ -22,9 +22,11 @@ import {
   updateProject,
   deleteProject,
 } from "./store.js";
-import { buildPreamble, branchSeed, researchProtocol, memoryOptimizePrompt, MEMORY_TASK_MARKER } from "./prompts.js";
+import { buildPreamble, branchSeed, researchProtocol, memoryOptimizePrompt, MEMORY_TASK_MARKER, AUDIT_MIN_CHARS } from "./prompts.js";
 import { getThread, runTurn } from "./codexClient.js";
 import { runHeavyResearch } from "./heavyResearch.js";
+import { runClaimAudit } from "./claimAudit.js";
+import { shouldCritique, runCritique } from "./shadowCritic.js";
 import { listServers, installServer, removeServer } from "./mcp.js";
 import { logUsage, usageSummary, activityFeed } from "./usage.js";
 import { listTasks, createTask, updateTask, deleteTask, runTask, startScheduler } from "./scheduler.js";
@@ -398,7 +400,7 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
     ? setTimeout(() => {
         run.stopped = true;
         run.controller.abort();
-        send({ type: "activity", kind: "error", label: "Time budget hit", detail: `Turn stopped after ${maxMin} min (set in Settings).`, done: true });
+        sendAndRecord({ type: "activity", id: "time-budget", kind: "error", label: "Time budget hit", detail: `Turn stopped after ${maxMin} min (set in Settings).`, done: true });
       }, maxMin * 60000)
     : null;
   try {
@@ -413,7 +415,7 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
 _(stopped)_` : "_(stopped)_") : finalText;
     conv.threadId = threadId || conv.threadId;
     if (seedNow && conv.threadId) conv.seedPending = false;
-    conv.messages.push({
+    const assistantMsg = {
       role: "assistant",
       text: answer,
       activities,
@@ -421,7 +423,8 @@ _(stopped)_` : "_(stopped)_") : finalText;
       ...(turnUsage ? { usage: turnUsage } : {}),
       ...(stopped ? { stopped: true } : {}),
       ts: Date.now(),
-    });
+    };
+    conv.messages.push(assistantMsg);
     saveConversation(conv);
     if (turnUsage) {
       logUsage({
@@ -434,6 +437,15 @@ _(stopped)_` : "_(stopped)_") : finalText;
       });
     }
     if (stopped) send({ type: "stopped", text: answer });
+    // Shadow critic: a second model reviews the finished answer before the
+    // stream closes. Its tokens are logged separately (see runShadowCritic) so
+    // they never land in this turn's usage.
+    if (shouldCritique({ enabled: readSettings().shadowCritic, researchMode, answer, stopped })) {
+      send({ type: "critic_pending" });
+      const question = conv.messages.filter((m) => m.role === "user").at(-1)?.text || text;
+      const critic = await runShadowCritic(conv, assistantMsg, question, answer, run.controller.signal);
+      if (critic) send({ type: "critic", text: critic.ok ? "LGTM" : critic.text });
+    }
     send({ type: "done", threadId: conv.threadId });
   } catch (err) {
     console.error(err);
@@ -445,6 +457,120 @@ _(stopped)_` : "_(stopped)_") : finalText;
     res.end();
   }
 });
+
+// ---------- claim audit (SSE) ----------
+
+// In-flight audits keyed by conversation id — one at a time, like chat turns.
+const activeAudits = new Map();
+
+// Re-checks an answer the app already gave: a throwaway Codex thread searches
+// the web for each load-bearing claim and reports a verdict per claim. The
+// result is stored on the audited message so it replays with the conversation.
+app.post("/api/conversations/:id/audit", async (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ error: "not found" });
+  if (activeAudits.has(conv.id)) return res.status(409).json({ error: "an audit is already running" });
+
+  const index = Number(req.body?.messageIndex);
+  const target = Number.isInteger(index) && index >= 0 ? conv.messages[index] : null;
+  if (!target || target.role !== "assistant") {
+    return res.status(400).json({ error: "messageIndex must point at an assistant message" });
+  }
+  const answer = String(target.text || "");
+  if (answer.length < AUDIT_MIN_CHARS) {
+    return res.status(400).json({ error: `answer is too short to audit (under ${AUDIT_MIN_CHARS} characters)` });
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  const heartbeat = setInterval(() => res.write(": ping\n\n"), 15000);
+
+  let auditUsage = null;
+  const forward = (ev) => {
+    if (ev.type === "usage" && ev.usage) auditUsage = ev.usage;
+    // The fact-checker's prose is scaffolding around the fenced block — the UI
+    // shows its activity, never its message text.
+    if (ev.type !== "assistant" && ev.type !== "assistant_delta") send(ev);
+  };
+
+  const run = { controller: new AbortController() };
+  activeAudits.set(conv.id, run);
+  let finished = false;
+  // The client closing the stream (tab closed, navigation) leaves nowhere to
+  // deliver the result — kill the codex child instead of letting it run on.
+  res.on("close", () => {
+    if (!finished) run.controller.abort();
+  });
+
+  const startedAt = Date.now();
+  try {
+    const { claims } = await runClaimAudit(answer, forward, run.controller.signal);
+    const audit = { ts: Date.now(), claims, durationMs: Date.now() - startedAt };
+    // Re-read: the transcript may have been rewritten while the audit ran, in
+    // which case this index no longer refers to the answer we checked.
+    const fresh = getConversation(conv.id);
+    const stored = fresh?.messages[index];
+    if (stored?.role === "assistant" && stored.text === answer) {
+      stored.audit = audit; // re-verifying replaces the previous audit
+      saveConversation(fresh);
+    }
+    if (auditUsage) {
+      logUsage({
+        ts: Date.now(),
+        conversationId: conv.id,
+        model: readSettings().model?.trim() || "default",
+        researchMode: "audit",
+        durationMs: Date.now() - startedAt,
+        ...auditUsage,
+      });
+    }
+    send({ type: "audit", messageIndex: index, audit });
+    send({ type: "done" });
+  } catch (err) {
+    console.error(err);
+    send({ type: "error", message: String(err?.message || err) });
+  } finally {
+    finished = true;
+    activeAudits.delete(conv.id);
+    clearInterval(heartbeat);
+    res.end();
+  }
+});
+// Runs the observer review for a just-stored answer and persists it on that
+// message (`critic: {text, ts}`, or `{ok: true, ts}` when the reviewer replied
+// LGTM). The critique's tokens go to a `criticUsage` key on the message and to
+// their own usage-log entry, never into the turn's `usage` accumulator.
+async function runShadowCritic(conv, message, question, answer, signal) {
+  const criticUsage = {};
+  const critic = await runCritique(
+    question,
+    answer,
+    (usage) => {
+      for (const [k, v] of Object.entries(usage)) {
+        if (typeof v === "number") criticUsage[k] = (criticUsage[k] || 0) + v;
+      }
+    },
+    signal,
+  );
+  if (Object.keys(criticUsage).length) {
+    message.criticUsage = criticUsage;
+    logUsage({
+      ts: Date.now(),
+      conversationId: conv.id,
+      model: "shadow-critic",
+      researchMode: "critic",
+      ...criticUsage,
+    });
+  }
+  if (critic) message.critic = { ...critic, ts: Date.now() };
+  if (critic || message.criticUsage) saveConversation(conv);
+  return critic;
+}
 
 app.listen(PORT, () => {
   console.log(`MockChatGPT running → http://localhost:${PORT}`);

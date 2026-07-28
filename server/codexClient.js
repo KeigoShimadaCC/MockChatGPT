@@ -5,7 +5,10 @@ import { WORKSPACE, GENERATED_DIR, readSettings } from "./store.js";
 
 const codex = new Codex();
 
-function threadOptions() {
+// `overrides` win over the global settings — for side threads that must run on a
+// fixed configuration (the shadow critic's cheap model) regardless of what the
+// user picked for their own turns.
+function threadOptions(overrides = {}) {
   const settings = readSettings();
   const opts = {
     workingDirectory: WORKSPACE,
@@ -16,17 +19,17 @@ function threadOptions() {
   };
   if (settings.model?.trim()) opts.model = settings.model.trim();
   if (settings.reasoningEffort?.trim()) opts.modelReasoningEffort = settings.reasoningEffort.trim();
-  return opts;
+  return { ...opts, ...overrides };
 }
 
 // A brand-new thread in the same workspace, unattached to any conversation
 // (used for heavy-research sub-researchers).
-export function startThread() {
-  return codex.startThread(threadOptions());
+export function startThread(overrides) {
+  return codex.startThread(threadOptions(overrides));
 }
 
-export function getThread(threadId) {
-  return threadId ? codex.resumeThread(threadId, threadOptions()) : startThread();
+export function getThread(threadId, overrides) {
+  return threadId ? codex.resumeThread(threadId, threadOptions(overrides)) : startThread(overrides);
 }
 
 // Runs one turn and forwards simplified events to `emit(event)`.

@@ -356,6 +356,7 @@ function renderConversation() {
     } else {
       const msg = document.createElement("div");
       msg.className = "msg assistant";
+      msg.dataset.index = i; // the audit endpoint addresses messages by index
       if (m.activities?.length) {
         const { panel, timeline, title } = buildAgentPanel(false);
         title.textContent = `Worked for ${fmtDuration(m.durationMs || 0)}${fmtUsage(m.usage)}`;
@@ -367,18 +368,33 @@ function renderConversation() {
       content.className = "content";
       content.appendChild(renderMarkdown(m.text, { planLive: i === msgs.length - 1 }));
       msg.appendChild(content);
-      // regenerate only rewrites the tail, but branching works from any answer
+      // holds the live verification panel, then the audit card
+      const slot = document.createElement("div");
+      slot.className = "audit-slot";
+      if (m.audit) slot.appendChild(buildAuditCard(m.audit, false));
+      msg.appendChild(slot);
       const actions = [];
+      if (m.critic) msg.appendChild(buildCriticNote(m.critic));
       if (editable && i === msgs.length - 1) {
         actions.push(["⟳ Regenerate", "Try this answer again", regenerateLast]);
       }
       if (!streaming) {
         actions.push(["⑂ Branch", "Start a new chat that continues from here", () => branchFrom(i)]);
       }
+      if (canAudit(m)) {
+        actions.push([
+          m.audit ? "✔ Re-verify" : "✔ Verify",
+          "Fact-check the claims in this answer",
+          () => startAudit(i),
+          "verify",
+        ]);
+      }
       if (actions.length) addMessageActions(msg, actions);
       messagesEl.appendChild(msg);
     }
   });
+  // a turn finishing mid-audit rebuilds these buttons — keep them locked out
+  if (auditing) setVerifyDisabled(true);
   scrollToBottom();
 }
 
@@ -464,29 +480,14 @@ async function streamTurn({ text = "", attachments = [], replaceLast = "", resea
     if (!res.ok) {
       throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
     }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf("\n\n")) >= 0) {
-        const chunk = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        if (!chunk.startsWith("data: ")) continue;
-        let ev;
-        try { ev = JSON.parse(chunk.slice(6)); } catch { continue; }
-        handleStreamEvent(ev, shell, state);
-      }
-    }
+    await readSSE(res, (ev) => handleStreamEvent(ev, shell, state));
   } catch (err) {
     if (err.name !== "AbortError") {
       shell.content.innerHTML = "";
       shell.content.appendChild(renderMarkdown(`⚠️ **Error:** ${err.message}`));
     }
   } finally {
+    clearCriticShimmer(shell);
     finalizeShell(shell);
     if (!state.final && shell.content.childNodes.length === 0) {
       shell.content.appendChild(renderMarkdown("_(no response)_"));
@@ -504,6 +505,28 @@ async function streamTurn({ text = "", attachments = [], replaceLast = "", resea
     if (state.saved && document.hidden) {
       const title = conversations.find((c) => c.id === convId)?.title || "MockChatGPT";
       notify(title, reply.slice(0, 140) || "Response ready", convId);
+    }
+  }
+}
+
+// Drains a `data: {json}` SSE body, handing each parsed event to `onEvent`.
+// Shared by chat turns and claim audits — both endpoints speak the same shape.
+async function readSSE(res, onEvent) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const chunk = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      if (!chunk.startsWith("data: ")) continue;
+      let ev;
+      try { ev = JSON.parse(chunk.slice(6)); } catch { continue; }
+      onEvent(ev);
     }
   }
 }
@@ -532,10 +555,22 @@ function handleStreamEvent(ev, shell, state) {
       if (ev.type !== "assistant_delta") state.final = true;
       scrollToBottom();
       break;
+    case "critic_pending":
+      clearCriticShimmer(shell);
+      shell.msg.appendChild(buildCriticShimmer());
+      scrollToBottom();
+      break;
+    case "critic":
+      clearCriticShimmer(shell);
+      shell.msg.appendChild(buildCriticNote(ev.text === "LGTM" ? { ok: true } : { text: ev.text }));
+      scrollToBottom();
+      break;
     case "error":
       shell.content.appendChild(renderMarkdown(`\n\n⚠️ ${ev.message}`));
       break;
     case "done":
+      // A critique that timed out or failed emits nothing — drop its shimmer.
+      clearCriticShimmer(shell);
       state.final = true;
       state.saved = true;
       finalizeShell(shell);
@@ -563,14 +598,17 @@ async function resendEdited(newText) {
   await streamTurn({ text: newText, replaceLast: "both" });
 }
 
+// `action` (optional 4th tuple slot) tags a button so it can be found again —
+// the Verify buttons are disabled as a group while an audit is running.
 function addMessageActions(parent, buttons) {
   const row = document.createElement("div");
   row.className = "msg-actions";
-  for (const [label, title, onClick] of buttons) {
+  for (const [label, title, onClick, action] of buttons) {
     const b = document.createElement("button");
     b.type = "button";
     b.title = title;
     b.textContent = label;
+    if (action) b.dataset.action = action;
     b.addEventListener("click", onClick);
     row.appendChild(b);
   }
@@ -897,6 +935,195 @@ function lcsDiff(a, b) {
   return ops;
 }
 
+/* ---------------- claim audit ---------------- */
+
+// Mirrors AUDIT_MIN_CHARS in server/prompts.js — short answers rarely carry
+// enough load-bearing claims to be worth a verification pass.
+const AUDIT_MIN_CHARS = 300;
+
+const VERDICTS = {
+  supported: { icon: "✅", label: "supported" },
+  unverifiable: { icon: "⚠️", label: "unverifiable" },
+  contradicted: { icon: "❌", label: "contradicted" },
+};
+
+let auditing = false; // one audit at a time, mirroring the server-side guard
+
+function canAudit(m) {
+  return (m.text || "").length >= AUDIT_MIN_CHARS;
+}
+
+function setVerifyDisabled(on) {
+  document.querySelectorAll('.msg-actions button[data-action="verify"]').forEach((b) => (b.disabled = on));
+}
+
+// Re-checks one stored answer: streams the fact-checker's activity into a mini
+// agent panel under the message, then swaps in the audit card.
+async function startAudit(index) {
+  if (streaming || auditing || !currentConv) return;
+  const slot = messagesEl.querySelector(`.msg.assistant[data-index="${index}"] .audit-slot`);
+  if (!slot) return;
+  const convId = currentConv.id;
+  auditing = true;
+  setVerifyDisabled(true);
+  slot.innerHTML = "";
+  const shell = buildAuditShell(slot);
+
+  try {
+    const res = await fetch(`/api/conversations/${convId}/audit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messageIndex: index }),
+    });
+    if (!res.ok) {
+      throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    }
+    await readSSE(res, (ev) => handleAuditEvent(ev, shell, slot, index, convId));
+  } catch (err) {
+    showAuditError(shell, slot, err.message);
+  } finally {
+    auditing = false;
+    setVerifyDisabled(false);
+  }
+}
+
+// `slot` can be detached by the time the audit lands (the user sent another
+// message meanwhile, re-rendering the transcript). The result is already stored
+// server-side, so the card just waits for the next natural re-render.
+function handleAuditEvent(ev, shell, slot, index, convId) {
+  switch (ev.type) {
+    case "activity":
+      renderActivityEntry(shell.timeline, shell.items, ev);
+      scrollToBottom();
+      break;
+    case "audit":
+      finishAuditShell(shell, `Verified in ${fmtDuration(ev.audit?.durationMs || 0)}`);
+      slot.appendChild(buildAuditCard(ev.audit, true));
+      // keep the in-memory transcript in step, so a later re-render replays it
+      if (currentConv?.id === convId && currentConv.messages[index]) {
+        currentConv.messages[index].audit = ev.audit;
+        renderVerifyLabel(index, true);
+      }
+      scrollToBottom();
+      break;
+    case "error":
+      showAuditError(shell, slot, ev.message);
+      break;
+  }
+}
+
+function showAuditError(shell, slot, message) {
+  finishAuditShell(shell, "Verification failed");
+  slot.appendChild(renderMarkdown(`⚠️ **Verification failed:** ${message}`));
+}
+
+function renderVerifyLabel(index, audited) {
+  const btn = messagesEl.querySelector(`.msg.assistant[data-index="${index}"] button[data-action="verify"]`);
+  if (btn) btn.textContent = audited ? "✔ Re-verify" : "✔ Verify";
+}
+
+function buildAuditShell(slot) {
+  const { panel, timeline, title } = buildAgentPanel(true);
+  panel.classList.add("audit-panel");
+  title.className = "agent-title thinking-shimmer";
+  title.textContent = "Verifying…";
+  slot.appendChild(panel);
+  const shell = { panel, timeline, title, items: new Map(), startedAt: Date.now() };
+  shell.timer = setInterval(() => {
+    if (shell.title.classList.contains("thinking-shimmer")) {
+      shell.title.textContent = `Verifying… ${fmtDuration(Date.now() - shell.startedAt)}`;
+    }
+  }, 1000);
+  return shell;
+}
+
+function finishAuditShell(shell, label) {
+  clearInterval(shell.timer);
+  shell.timeline.querySelectorAll(".spinner").forEach((s) => (s.className = "ind"));
+  shell.title.className = "agent-title";
+  shell.title.textContent = label;
+  shell.panel.classList.remove("open");
+}
+
+// The verdict overlay itself: collapsed when replaying a saved conversation,
+// expanded straight after a run.
+function buildAuditCard(audit, expanded) {
+  const claims = Array.isArray(audit?.claims) ? audit.claims : [];
+  const card = document.createElement("div");
+  card.className = "audit-card" + (expanded ? " open" : "");
+
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "audit-header";
+  header.innerHTML =
+    '<svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg><span class="audit-title"></span>';
+  const tally = Object.entries(VERDICTS)
+    .map(([v, { label }]) => `${claims.filter((c) => verdictOf(c) === v).length} ${label}`)
+    .join(" · ");
+  header.querySelector(".audit-title").textContent = `Claim audit — ${tally}`;
+  header.addEventListener("click", () => card.classList.toggle("open"));
+
+  const list = document.createElement("div");
+  list.className = "audit-claims";
+  for (const c of claims) {
+    const verdict = verdictOf(c);
+    const row = document.createElement("div");
+    row.className = "audit-claim v-" + verdict;
+    const icon = document.createElement("span");
+    icon.className = "c-icon";
+    icon.textContent = VERDICTS[verdict].icon;
+    icon.title = VERDICTS[verdict].label;
+    const body = document.createElement("div");
+    body.className = "c-body";
+    const claimEl = document.createElement("div");
+    claimEl.className = "c-claim";
+    claimEl.textContent = c.claim || "";
+    body.appendChild(claimEl);
+    if (c.note) {
+      const note = document.createElement("div");
+      note.className = "c-note";
+      note.textContent = c.note;
+      body.appendChild(note);
+    }
+    if (isHttpUrl(c.source)) {
+      const link = document.createElement("a");
+      link.className = "c-source";
+      link.href = c.source;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = hostLabel(c.source);
+      body.appendChild(link);
+    }
+    row.append(icon, body);
+    list.appendChild(row);
+  }
+  card.append(header, list);
+  return card;
+}
+
+// An unrecognised verdict must not read as a clean bill of health.
+function verdictOf(claim) {
+  return VERDICTS[claim?.verdict] ? claim.verdict : "unverifiable";
+}
+
+// Sources come from model output — only plain http(s) links get rendered.
+function isHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function hostLabel(value) {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "");
+  } catch {
+    return value;
+  }
+}
+
 /* ---------------- attachments ---------------- */
 
 async function uploadFiles(fileList) {
@@ -1217,6 +1444,7 @@ async function saveModelSettings(patch) {
 async function loadModelSettings() {
   currentSettings = await fetch("/api/settings").then((r) => r.json());
   updateModelUI();
+  updateCriticUI();
 }
 
 $("#model-badge").addEventListener("click", (e) => {
@@ -1272,6 +1500,64 @@ modeMenu.querySelectorAll("[data-mode]").forEach((b) =>
     updateModeUI();
   }));
 document.addEventListener("click", () => (modeMenu.hidden = true));
+
+/* ---------------- shadow critic ---------------- */
+
+// A composer toggle rather than a per-turn mode: it lives in settings so the
+// server can decide, turn by turn, whether to run the observer review.
+const criticBtn = $("#critic-btn");
+
+function updateCriticUI() {
+  criticBtn.classList.toggle("active", !!currentSettings.shadowCritic);
+}
+
+criticBtn.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const next = !currentSettings.shadowCritic;
+  currentSettings = { ...currentSettings, shadowCritic: next };
+  updateCriticUI(); // optimistic — the pill should feel instant
+  await saveModelSettings({ shadowCritic: next });
+  updateCriticUI();
+});
+
+// The review is markdown bullets; `ok` means the reviewer replied LGTM and the
+// note collapses to a checkmark.
+function buildCriticNote(critic) {
+  const note = document.createElement("div");
+  note.className = "critic-note";
+  const glyph = document.createElement("span");
+  glyph.className = "critic-glyph";
+  glyph.textContent = "🕶";
+  const body = document.createElement("div");
+  body.className = "critic-body";
+  if (critic.ok) {
+    note.classList.add("ok");
+    note.title = "Shadow critic found no issues";
+    body.textContent = "✓";
+  } else {
+    note.title = "Shadow critic";
+    body.appendChild(renderMarkdown(critic.text));
+  }
+  note.append(glyph, body);
+  return note;
+}
+
+function buildCriticShimmer() {
+  const note = document.createElement("div");
+  note.className = "critic-note critic-pending";
+  const glyph = document.createElement("span");
+  glyph.className = "critic-glyph";
+  glyph.textContent = "🕶";
+  const body = document.createElement("div");
+  body.className = "critic-body thinking-shimmer";
+  body.textContent = "Shadow critic reviewing…";
+  note.append(glyph, body);
+  return note;
+}
+
+function clearCriticShimmer(shell) {
+  shell.msg.querySelector(".critic-pending")?.remove();
+}
 
 /* ---------------- projects ---------------- */
 
