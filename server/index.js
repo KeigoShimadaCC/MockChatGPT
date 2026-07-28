@@ -24,6 +24,7 @@ import {
 import { buildPreamble, researchProtocol, memoryOptimizePrompt, MEMORY_TASK_MARKER } from "./prompts.js";
 import { getThread, runTurn } from "./codexClient.js";
 import { runHeavyResearch } from "./heavyResearch.js";
+import { shouldCritique, runCritique } from "./shadowCritic.js";
 import { listServers, installServer, removeServer } from "./mcp.js";
 import { logUsage, usageSummary, activityFeed } from "./usage.js";
 import { listTasks, createTask, updateTask, deleteTask, runTask, startScheduler } from "./scheduler.js";
@@ -391,7 +392,7 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
 
 _(stopped)_` : "_(stopped)_") : finalText;
     conv.threadId = threadId || conv.threadId;
-    conv.messages.push({
+    const assistantMsg = {
       role: "assistant",
       text: answer,
       activities,
@@ -399,7 +400,8 @@ _(stopped)_` : "_(stopped)_") : finalText;
       ...(turnUsage ? { usage: turnUsage } : {}),
       ...(stopped ? { stopped: true } : {}),
       ts: Date.now(),
-    });
+    };
+    conv.messages.push(assistantMsg);
     saveConversation(conv);
     if (turnUsage) {
       logUsage({
@@ -412,6 +414,15 @@ _(stopped)_` : "_(stopped)_") : finalText;
       });
     }
     if (stopped) send({ type: "stopped", text: answer });
+    // Shadow critic: a second model reviews the finished answer before the
+    // stream closes. Its tokens are logged separately (see runShadowCritic) so
+    // they never land in this turn's usage.
+    if (shouldCritique({ enabled: readSettings().shadowCritic, researchMode, answer, stopped })) {
+      send({ type: "critic_pending" });
+      const question = conv.messages.filter((m) => m.role === "user").at(-1)?.text || text;
+      const critic = await runShadowCritic(conv, assistantMsg, question, answer, run.controller.signal);
+      if (critic) send({ type: "critic", text: critic.ok ? "LGTM" : critic.text });
+    }
     send({ type: "done", threadId: conv.threadId });
   } catch (err) {
     console.error(err);
@@ -423,6 +434,37 @@ _(stopped)_` : "_(stopped)_") : finalText;
     res.end();
   }
 });
+
+// Runs the observer review for a just-stored answer and persists it on that
+// message (`critic: {text, ts}`, or `{ok: true, ts}` when the reviewer replied
+// LGTM). The critique's tokens go to a `criticUsage` key on the message and to
+// their own usage-log entry, never into the turn's `usage` accumulator.
+async function runShadowCritic(conv, message, question, answer, signal) {
+  const criticUsage = {};
+  const critic = await runCritique(
+    question,
+    answer,
+    (usage) => {
+      for (const [k, v] of Object.entries(usage)) {
+        if (typeof v === "number") criticUsage[k] = (criticUsage[k] || 0) + v;
+      }
+    },
+    signal,
+  );
+  if (Object.keys(criticUsage).length) {
+    message.criticUsage = criticUsage;
+    logUsage({
+      ts: Date.now(),
+      conversationId: conv.id,
+      model: "shadow-critic",
+      researchMode: "critic",
+      ...criticUsage,
+    });
+  }
+  if (critic) message.critic = { ...critic, ts: Date.now() };
+  if (critic || message.criticUsage) saveConversation(conv);
+  return critic;
+}
 
 app.listen(PORT, () => {
   console.log(`MockChatGPT running → http://localhost:${PORT}`);
