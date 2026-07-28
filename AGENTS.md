@@ -28,6 +28,7 @@ curl -s -N -X POST localhost:3939/api/conversations/$CONV/messages \
 - `server/codexClient.js` — Codex thread options + event → SSE mapping
 - `server/prompts.js` — first-turn preamble (memory, nickname, custom instructions, project), research-mode protocols (wide/deep plan+exec, heavy planning), memory-optimize prompt
 - `server/heavyResearch.js` — Heavy mode orchestrator: subquestion parse → parallel worker threads → synthesis
+- `server/claimAudit.js` — "Verify" fact-checking pass: fresh thread per audit, `claim-audit` block parse → per-claim verdicts
 - `server/shadowCritic.js` — optional observer review of each finished answer, on a throwaway thread with its own cheap model
 - `server/scheduler.js` — scheduled-tasks store + 30s cron loop (each run = a Codex turn into a "⏰" conversation)
 - `server/mcp.js` — MCP connector manager shelling out to `codex mcp add/remove/list`; curated catalog

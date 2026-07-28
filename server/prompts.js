@@ -102,6 +102,33 @@ Rewrite memory.md in your workspace root, in place, so it stays useful as it gro
 Touch no other file. Reply with ONE line summarizing what changed, e.g. "Merged 6 duplicates, dropped 2 stale entries — 18 bullets down to 11."`;
 }
 
+/* ---------------- claim audit ---------------- */
+
+// Below this an answer rarely carries enough load-bearing claims to be worth a
+// verification pass; the UI hides the Verify action on shorter messages too.
+export const AUDIT_MIN_CHARS = 300;
+
+// Runs on a throwaway thread that has never seen the conversation, so the
+// checker judges the text on its own merits. The answer is delimited rather
+// than fenced because it usually contains fences of its own.
+export function claimAuditPrompt(answer) {
+  return `You are a fact-checker. From the following answer, extract the 5–10 most load-bearing factual claims (skip opinions, hedged statements, and things the user said). For EACH claim run a genuine web search to verify it, preferring primary sources, then output ONLY a fenced block:
+
+\`\`\`claim-audit
+[{"claim":"…","verdict":"supported|unverifiable|contradicted","source":"url or null","note":"one line"}]
+\`\`\`
+
+Rules:
+- One object per claim, in the order the claims appear in the answer.
+- Verdicts: "supported" when sources back the claim, "contradicted" when sources say otherwise, "unverifiable" when you could not find evidence either way. Never guess from memory — every verdict must rest on a search you actually ran.
+- "source" is the URL you relied on (null only when nothing usable was found); "note" is one short line saying what the source shows.
+- Write nothing after the fenced block, and do not edit any files.
+
+--- ANSWER TO VERIFY ---
+${answer}
+--- END OF ANSWER ---`;
+}
+
 // Injected once per Codex thread (first turn of each conversation).
 export function buildPreamble(projectId = null) {
   const settings = readSettings();
