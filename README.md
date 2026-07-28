@@ -65,6 +65,7 @@ data/        ← conversations + settings (JSON)
 3. [Free MCP servers to fill capability gaps](docs/03-mcp-options.md)
 4. [Which capabilities Codex SDK covers](docs/04-codex-capability-mapping.md)
 5. [How the industry builds deep research (and our mode design)](docs/05-deep-research-modes.md)
+6. [Roadmap: 10 researched features ChatGPT/Claude lack](docs/06-roadmap-proposals.md)
 
 ## Known gaps vs. real ChatGPT
 
