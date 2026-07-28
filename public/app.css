@@ -434,6 +434,38 @@ body {
   border-radius: 999px; padding: 9px 18px; font-size: 13px; cursor: pointer; margin-right: auto;
 }
 
+/* claim audit — verification overlay under an assistant message */
+.audit-slot:not(:empty) { margin-top: 12px; }
+.audit-panel { margin: 0 0 8px; }
+.audit-card {
+  border: 1px solid var(--border); border-radius: 14px;
+  background: var(--bg-sidebar); padding: 10px 14px;
+}
+.audit-header {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; padding: 2px 0; cursor: pointer;
+  font-family: inherit; font-size: 14px; font-weight: 600;
+  color: var(--text-secondary); text-align: left;
+}
+.audit-header:hover { color: var(--text); }
+.audit-header .chevron { transition: transform 0.15s ease; flex-shrink: 0; }
+.audit-card.open .audit-header .chevron { transform: rotate(90deg); }
+.audit-claims {
+  display: none; flex-direction: column; gap: 12px;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
+}
+.audit-card.open .audit-claims { display: flex; }
+.audit-claim { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
+.audit-claim .c-icon { line-height: 1.5; flex-shrink: 0; }
+.audit-claim .c-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.audit-claim .c-claim { overflow-wrap: anywhere; }
+.audit-claim .c-note { font-size: 13px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.audit-claim .c-source { font-size: 12.5px; color: #2964aa; text-decoration: none; overflow-wrap: anywhere; }
+.audit-claim .c-source:hover { text-decoration: underline; }
+.audit-claim.v-contradicted .c-claim {
+  text-decoration: underline wavy #e02e2a; text-underline-offset: 3px;
+}
+
 /* in-chat approval cards (mcp-install, task-create) */
 .mcp-card {
   border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; margin: 10px 0;
