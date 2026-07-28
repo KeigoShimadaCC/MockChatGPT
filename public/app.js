@@ -307,8 +307,16 @@ function finalizeShell(shell) {
   }
   shell.timeline.querySelectorAll(".spinner").forEach((s) => (s.className = "ind"));
   shell.title.className = "agent-title";
-  shell.title.textContent = `Worked for ${fmtDuration(Date.now() - shell.startedAt)}`;
+  shell.title.textContent = `Worked for ${fmtDuration(Date.now() - shell.startedAt)}${fmtUsage(shell.usage)}`;
   shell.panel.classList.remove("open");
+}
+
+function fmtTok(n) {
+  return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(n || 0);
+}
+function fmtUsage(u) {
+  if (!u || (!u.input_tokens && !u.output_tokens)) return "";
+  return ` · ${fmtTok(u.input_tokens)}→${fmtTok(u.output_tokens)} tok`;
 }
 
 function upsertActivity(shell, ev) {
@@ -342,7 +350,7 @@ function renderConversation() {
       msg.className = "msg assistant";
       if (m.activities?.length) {
         const { panel, timeline, title } = buildAgentPanel(false);
-        title.textContent = `Worked for ${fmtDuration(m.durationMs || 0)}`;
+        title.textContent = `Worked for ${fmtDuration(m.durationMs || 0)}${fmtUsage(m.usage)}`;
         const items = new Map();
         for (const ev of m.activities) renderActivityEntry(timeline, items, { ...ev, done: true });
         msg.appendChild(panel);
@@ -491,6 +499,14 @@ function handleStreamEvent(ev, shell, state) {
       break;
     case "activity":
       upsertActivity(shell, ev);
+      break;
+    case "usage":
+      if (ev.usage) {
+        shell.usage = shell.usage || {};
+        for (const [k, v] of Object.entries(ev.usage)) {
+          if (typeof v === "number") shell.usage[k] = (shell.usage[k] || 0) + v;
+        }
+      }
       break;
     case "assistant_delta":
     case "assistant":
@@ -676,7 +692,17 @@ promptInput.addEventListener("input", () => {
 promptInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
+    // slash-macro menu open → Enter picks the first match instead of sending
+    const macroMenu = document.getElementById("macro-menu");
+    if (macroMenu && !macroMenu.hidden) {
+      macroMenu.querySelector(".menu-item")?.click();
+      return;
+    }
     sendMessage();
+  }
+  if (e.key === "Escape") {
+    const macroMenu = document.getElementById("macro-menu");
+    if (macroMenu) macroMenu.hidden = true;
   }
 });
 sendBtn.addEventListener("click", sendMessage);
@@ -693,9 +719,100 @@ $("#settings-btn").addEventListener("click", async () => {
   $("#set-instructions").value = settings.customInstructions || "";
   $("#set-memory-enabled").checked = settings.memoryEnabled !== false;
   $("#set-memory").value = mem.memory || "";
+  $("#set-max-minutes").value = Number(settings.maxTurnMinutes) || 0;
   $("#memory-optimize-status").textContent = "";
+  settingsCache = settings;
+  renderProfiles();
+  renderMacros();
   refreshMemoryWeekly();
   backdrop.hidden = false;
+});
+
+/* profiles & macros (stored in settings.json) */
+
+let settingsCache = {};
+
+async function patchSettings(patch) {
+  settingsCache = await fetch("/api/settings", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch),
+  }).then((r) => r.json());
+  currentSettings = settingsCache; // keep the composer's macro source fresh
+}
+
+function renderProfiles() {
+  const sel = $("#profile-select");
+  const profiles = settingsCache.profiles || [];
+  sel.innerHTML = '<option value="">None</option>' +
+    profiles.map((p) => `<option>${p.name.replace(/[<>&"]/g, "")}</option>`).join("");
+  sel.value = settingsCache.activeProfile || "";
+  const has = !!sel.value;
+  $("#profile-edit").hidden = !has;
+  $("#profile-delete").hidden = !has;
+}
+
+$("#profile-select").addEventListener("change", async (e) => {
+  await patchSettings({ activeProfile: e.target.value });
+  renderProfiles();
+});
+$("#profile-add").addEventListener("click", async () => {
+  const name = prompt("Profile name (e.g. Work):")?.trim();
+  if (!name) return;
+  const instructions = prompt(`Instructions for "${name}":`) || "";
+  const profiles = (settingsCache.profiles || []).filter((p) => p.name !== name);
+  profiles.push({ name, instructions });
+  await patchSettings({ profiles, activeProfile: name });
+  renderProfiles();
+});
+$("#profile-edit").addEventListener("click", async () => {
+  const name = settingsCache.activeProfile;
+  const p = (settingsCache.profiles || []).find((p) => p.name === name);
+  if (!p) return;
+  const instructions = prompt(`Instructions for "${name}":`, p.instructions);
+  if (instructions === null) return;
+  p.instructions = instructions;
+  await patchSettings({ profiles: settingsCache.profiles });
+  renderProfiles();
+});
+$("#profile-delete").addEventListener("click", async () => {
+  const name = settingsCache.activeProfile;
+  if (!name || !confirm(`Delete profile "${name}"?`)) return;
+  await patchSettings({
+    profiles: (settingsCache.profiles || []).filter((p) => p.name !== name),
+    activeProfile: "",
+  });
+  renderProfiles();
+});
+
+function renderMacros() {
+  const list = $("#macro-list");
+  const macros = settingsCache.macros || [];
+  list.innerHTML = macros.length ? "" : "No macros yet.";
+  for (const m of macros) {
+    const row = document.createElement("div");
+    const del = document.createElement("button");
+    del.className = "output-toggle";
+    del.textContent = "remove";
+    del.addEventListener("click", async () => {
+      await patchSettings({ macros: macros.filter((x) => x.name !== m.name) });
+      renderMacros();
+    });
+    const label = document.createElement("code");
+    label.textContent = "/" + m.name;
+    row.append(label, document.createTextNode(" " + m.template.slice(0, 60) + " "), del);
+    list.appendChild(row);
+  }
+}
+
+$("#macro-add").addEventListener("click", async () => {
+  const name = $("#macro-name").value.trim().replace(/^\//, "");
+  const template = $("#macro-template").value.trim();
+  if (!name || !template) return;
+  const macros = (settingsCache.macros || []).filter((m) => m.name !== name);
+  macros.push({ name, template });
+  await patchSettings({ macros });
+  $("#macro-name").value = "";
+  $("#macro-template").value = "";
+  renderMacros();
 });
 
 /* memory "dreaming" — on-demand and weekly rewrites of memory.md */
@@ -768,6 +885,7 @@ $("#settings-save").addEventListener("click", async () => {
         nickname: $("#set-nickname").value,
         customInstructions: $("#set-instructions").value,
         memoryEnabled: $("#set-memory-enabled").checked,
+        maxTurnMinutes: Number($("#set-max-minutes").value) || 0,
       }),
     }),
     fetch("/api/memory", {
@@ -1459,6 +1577,163 @@ function buildTaskCreateCard(jsonText) {
   card.append(actions, status);
   return card;
 }
+
+/* ---------------- activity & usage dashboard ---------------- */
+
+$("#activity-btn").addEventListener("click", async () => {
+  $("#activity-backdrop").hidden = false;
+  $("#usage-summary").textContent = "Loading…";
+  const [usage, feed] = await Promise.all([
+    fetch("/api/usage?days=30").then((r) => r.json()),
+    fetch("/api/activity?days=7").then((r) => r.json()),
+  ]);
+  const t = usage.totals;
+  $("#usage-summary").textContent =
+    `Last 30 days: ${t.turns} turns · ${fmtTok(t.input)} in / ${fmtTok(t.output)} out tokens` +
+    (t.cached ? ` (${fmtTok(t.cached)} cached)` : "") +
+    ` · models: ${Object.entries(usage.byModel).map(([m, v]) => `${m} ${v.turns}`).join(", ") || "—"}`;
+  // 14-day bar chart, pure divs
+  const chart = $("#usage-chart");
+  chart.innerHTML = "";
+  const days = [...Array(14)].map((_, i) => {
+    const d = new Date(Date.now() - (13 - i) * 86400000);
+    return d.toISOString().slice(0, 10);
+  });
+  const max = Math.max(1, ...days.map((d) => (usage.byDay[d]?.output || 0) + (usage.byDay[d]?.input || 0)));
+  for (const d of days) {
+    const v = (usage.byDay[d]?.input || 0) + (usage.byDay[d]?.output || 0);
+    const col = document.createElement("div");
+    col.className = "u-col";
+    col.title = `${d}: ${fmtTok(v)} tokens, ${usage.byDay[d]?.turns || 0} turns`;
+    const bar = document.createElement("div");
+    bar.className = "u-bar";
+    bar.style.height = Math.round((v / max) * 60) + "px";
+    const lbl = document.createElement("div");
+    lbl.className = "u-lbl";
+    lbl.textContent = d.slice(8);
+    col.append(bar, lbl);
+    chart.appendChild(col);
+  }
+  // feed
+  const feedEl = $("#activity-feed");
+  feedEl.innerHTML = feed.length ? "" : '<div class="mcp-note">No agent activity in the last 7 days.</div>';
+  let lastDay = "";
+  const KIND_LABELS = { command: "cmd", search: "search", file: "file", browse: "browse", reasoning: "think", plan: "plan", tool: "tool", error: "err" };
+  for (const e of feed) {
+    const day = new Date(e.ts).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    if (day !== lastDay) {
+      const h = document.createElement("div");
+      h.className = "conv-group-label";
+      h.textContent = day;
+      feedEl.appendChild(h);
+      lastDay = day;
+    }
+    const row = document.createElement("div");
+    row.className = "task-row";
+    row.style.cursor = "pointer";
+    const grow = document.createElement("div");
+    grow.className = "grow";
+    grow.innerHTML = `<div class="t-prompt"></div><div class="meta"></div>`;
+    grow.querySelector(".t-prompt").textContent = (e.scheduled ? "⏰ " : "") + e.title;
+    const kinds = Object.entries(e.kinds).map(([k, n]) => `${n} ${KIND_LABELS[k] || k}`).join(" · ");
+    grow.querySelector(".meta").textContent =
+      `${new Date(e.ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} · ${fmtDuration(e.durationMs)}` +
+      (kinds ? ` · ${kinds}` : "") + fmtUsage(e.usage) + (e.stopped ? " · stopped" : "") +
+      (e.files.length ? ` · touched: ${e.files.join(", ").slice(0, 80)}` : "");
+    row.appendChild(grow);
+    row.addEventListener("click", () => {
+      $("#activity-backdrop").hidden = true;
+      openConversation(e.conversationId);
+    });
+    feedEl.appendChild(row);
+  }
+});
+
+/* ---------------- slash macros in the composer ---------------- */
+
+const macroMenu = document.createElement("div");
+macroMenu.id = "macro-menu";
+macroMenu.hidden = true;
+// clicks inside the menu must not reach the document-level close handler —
+// selecting a macro swaps the menu's children, which detaches e.target and
+// makes contains() checks fail
+macroMenu.addEventListener("click", (e) => e.stopPropagation());
+$("#composer").style.position = "relative";
+$("#composer").appendChild(macroMenu);
+
+function composerMacros() {
+  return currentSettings.macros || settingsCache.macros || [];
+}
+
+function updateMacroMenu() {
+  const match = promptInput.value.match(/^\/(\w*)$/);
+  const macros = match ? composerMacros().filter((m) => m.name.startsWith(match[1])) : [];
+  if (!match || !macros.length) {
+    macroMenu.hidden = true;
+    return;
+  }
+  macroMenu.innerHTML = "";
+  macros.slice(0, 8).forEach((m, i) => {
+    const b = document.createElement("button");
+    b.className = "menu-item" + (i === 0 ? " selected" : "");
+    b.innerHTML = `<span></span><span class="menu-desc"></span>`;
+    b.children[0].textContent = "/" + m.name;
+    b.children[1].textContent = m.template.slice(0, 44);
+    b.addEventListener("click", () => applyMacro(m));
+    macroMenu.appendChild(b);
+  });
+  macroMenu.hidden = false;
+}
+
+function applyMacro(m) {
+  macroMenu.hidden = true;
+  const vars = [...new Set([...m.template.matchAll(/\{\{(.+?)\}\}/g)].map((x) => x[1].trim()))];
+  if (!vars.length) {
+    promptInput.value = m.template;
+    autogrow();
+    promptInput.focus();
+    promptInput.dispatchEvent(new Event("input"));
+    return;
+  }
+  // fill-in form for {{vars}}
+  macroMenu.innerHTML = "";
+  const inputs = {};
+  for (const v of vars) {
+    const row = document.createElement("div");
+    row.className = "env-row";
+    const label = document.createElement("code");
+    label.textContent = v;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = v;
+    inputs[v] = input;
+    row.append(label, input);
+    macroMenu.appendChild(row);
+  }
+  const insert = document.createElement("button");
+  insert.className = "primary";
+  insert.textContent = "Insert";
+  insert.style.margin = "6px";
+  insert.addEventListener("click", () => {
+    let text = m.template;
+    for (const v of vars) text = text.replaceAll(`{{${v}}}`, inputs[v].value.trim() || v);
+    // also handle templates written with inner spacing like {{ var }}
+    text = text.replace(/\{\{\s*(.+?)\s*\}\}/g, (_, name) => inputs[name.trim()]?.value.trim() || name.trim());
+    macroMenu.hidden = true;
+    promptInput.value = text;
+    autogrow();
+    promptInput.focus();
+    promptInput.dispatchEvent(new Event("input"));
+  });
+  macroMenu.appendChild(insert);
+  macroMenu.hidden = false;
+  Object.values(inputs)[0].focus();
+}
+
+promptInput.addEventListener("input", updateMacroMenu);
+document.addEventListener("click", (e) => {
+  if (!macroMenu.contains(e.target) && e.target !== promptInput) macroMenu.hidden = true;
+});
 
 /* ---------------- generic modal close ---------------- */
 

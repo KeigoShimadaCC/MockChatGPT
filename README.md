@@ -27,6 +27,9 @@ The goal: a chat app a ChatGPT user feels immediately at home in, backed by a ge
 | ⏹️ Real stop / regenerate / edit | Stop actually kills the Codex turn server-side; regenerate and edit-and-resend rewrite the stored transcript |
 | 🔔 Desktop notifications | Fired when a turn finishes in a hidden tab or a scheduled task lands; click to open the chat |
 | 📚 Self-authored skills | The agent writes its own reusable playbooks in `workspace/skills/` and consults them; view/edit them from the sidebar |
+| 📊 Activity & usage dashboard | "What did my agent do?" audit feed across all chats + token usage heat-bar chart; per-message token counts in the Thinking header |
+| ⌨️ Slash macros & profiles | User-defined `/commands` with `{{var}}` fill-in forms; switchable instruction profiles (Work/Personal/…) |
+| ⏱️ Turn time budget | Optional hard cap: stop any turn after N minutes (Settings) |
 
 ## Quick start
 

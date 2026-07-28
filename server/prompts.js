@@ -138,6 +138,12 @@ MEMORY
   if (settings.customInstructions?.trim()) {
     preamble += `\n\n<custom_instructions>\nThe user has set these custom instructions:\n${settings.customInstructions.trim()}\n</custom_instructions>`;
   }
+  // switchable instruction profiles (work/personal/…): the active one stacks on
+  // top of the base custom instructions
+  const profile = (settings.profiles || []).find((p) => p.name === settings.activeProfile);
+  if (profile?.instructions?.trim()) {
+    preamble += `\n\n<instruction_profile name="${profile.name}">\nThe user's active instruction profile:\n${profile.instructions.trim()}\n</instruction_profile>`;
+  }
   const project = projectId && getProject(projectId);
   if (project) {
     preamble += `\n\n<project name="${project.name}">\nThis conversation belongs to the project "${project.name}". Files the user uploads for this project live under projects/${project.id}/ in your workspace — consult them when relevant.`;

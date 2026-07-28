@@ -32,6 +32,10 @@
       </div>
       <nav id="conv-list"></nav>
       <div class="sidebar-bottom">
+        <button id="activity-btn" class="sidebar-item">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          <span>Activity</span>
+        </button>
         <button id="tasks-btn" class="sidebar-item">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
           <span>Scheduled tasks</span>
@@ -122,6 +126,19 @@
       </div>
       <input type="file" id="file-input" multiple hidden />
     </main>
+
+    <!-- Activity modal -->
+    <div id="activity-backdrop" class="backdrop" hidden>
+      <div class="modal">
+        <div class="modal-header"><h2>Agent activity</h2><button class="modal-x" data-close="activity-backdrop">✕</button></div>
+        <div class="modal-body">
+          <div id="usage-summary" class="mcp-note"></div>
+          <div id="usage-chart"></div>
+          <h3>What the agent did</h3>
+          <div id="activity-feed"></div>
+        </div>
+      </div>
+    </div>
 
     <!-- Tasks modal -->
     <div id="tasks-backdrop" class="backdrop" hidden>
@@ -235,6 +252,30 @@
           <label class="field">
             <span>Custom instructions</span>
             <textarea id="set-instructions" rows="4" placeholder="How would you like MockChatGPT to respond?"></textarea>
+          </label>
+          <div class="field">
+            <span>Instruction profiles</span>
+            <div class="form-row">
+              <select id="profile-select"><option value="">None</option></select>
+              <button id="profile-add" class="mini-btn">＋ New</button>
+              <button id="profile-edit" class="mini-btn" hidden>Edit</button>
+              <button id="profile-delete" class="mini-btn danger" hidden>Delete</button>
+            </div>
+            <div class="mcp-note">The active profile stacks on top of your custom instructions (e.g. Work, Personal, Writing).</div>
+          </div>
+          <div class="field">
+            <span>Slash macros</span>
+            <div id="macro-list" class="mcp-note"></div>
+            <div class="form-row">
+              <input id="macro-name" type="text" placeholder="name" style="width:110px" />
+              <input id="macro-template" type="text" placeholder="template — use {{topic}} for fill-ins" style="flex:1" />
+              <button id="macro-add" class="mini-btn">Add</button>
+            </div>
+            <div class="mcp-note">Type <code>/</code> in the composer to insert one; <code>{{vars}}</code> pop a fill-in form.</div>
+          </div>
+          <label class="field">
+            <span>Max minutes per turn (0 = no limit)</span>
+            <input id="set-max-minutes" type="number" min="0" max="60" style="width:100px" />
           </label>
           <label class="field checkbox">
             <input id="set-memory-enabled" type="checkbox" checked />

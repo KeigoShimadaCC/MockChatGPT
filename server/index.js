@@ -25,6 +25,7 @@ import { buildPreamble, researchProtocol, memoryOptimizePrompt, MEMORY_TASK_MARK
 import { getThread, runTurn } from "./codexClient.js";
 import { runHeavyResearch } from "./heavyResearch.js";
 import { listServers, installServer, removeServer } from "./mcp.js";
+import { logUsage, usageSummary, activityFeed } from "./usage.js";
 import { listTasks, createTask, updateTask, deleteTask, runTask, startScheduler } from "./scheduler.js";
 import { listSkills, readSkill, writeSkill, deleteSkill, ensureIndex } from "./skills.js";
 
@@ -150,6 +151,10 @@ app.delete("/api/skills/:slug", (req, res) => {
     res.status(400).json({ error: e.message });
   }
 });
+
+// ---------- usage & activity ----------
+app.get("/api/usage", (req, res) => res.json(usageSummary(Number(req.query.days) || 30)));
+app.get("/api/activity", (req, res) => res.json(activityFeed(Number(req.query.days) || 7)));
 
 // ---------- conversations ----------
 app.get("/api/conversations", (req, res) => res.json(listConversations()));
@@ -344,6 +349,7 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
   // capture the agent's activity timeline so it can be replayed when the
   // conversation is reopened (ChatGPT-style "thinking" expander)
   const activities = [];
+  let turnUsage = null;
   const startedAt = Date.now();
   const sendAndRecord = (ev) => {
     if (ev.type === "activity") {
@@ -353,11 +359,27 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
       if (existing) Object.assign(existing, ev);
       else activities.push({ ...ev });
     }
+    if (ev.type === "usage" && ev.usage) {
+      // heavy mode emits one usage event per worker/phase — accumulate
+      turnUsage = turnUsage || {};
+      for (const [k, v] of Object.entries(ev.usage)) {
+        if (typeof v === "number") turnUsage[k] = (turnUsage[k] || 0) + v;
+      }
+    }
     send(ev);
   };
 
   const run = { controller: new AbortController(), stopped: false };
   activeRuns.set(conv.id, run);
+  // optional per-turn time budget (settings.maxTurnMinutes, 0/absent = off)
+  const maxMin = Number(readSettings().maxTurnMinutes) || 0;
+  const budgetTimer = maxMin
+    ? setTimeout(() => {
+        run.stopped = true;
+        run.controller.abort();
+        send({ type: "activity", kind: "error", label: "Time budget hit", detail: `Turn stopped after ${maxMin} min (set in Settings).`, done: true });
+      }, maxMin * 60000)
+    : null;
   try {
     const thread = getThread(conv.threadId);
     const { threadId, finalText, aborted } =
@@ -374,16 +396,28 @@ _(stopped)_` : "_(stopped)_") : finalText;
       text: answer,
       activities,
       durationMs: Date.now() - startedAt,
+      ...(turnUsage ? { usage: turnUsage } : {}),
       ...(stopped ? { stopped: true } : {}),
       ts: Date.now(),
     });
     saveConversation(conv);
+    if (turnUsage) {
+      logUsage({
+        ts: Date.now(),
+        conversationId: conv.id,
+        model: readSettings().model?.trim() || "default",
+        researchMode: researchMode || "",
+        durationMs: Date.now() - startedAt,
+        ...turnUsage,
+      });
+    }
     if (stopped) send({ type: "stopped", text: answer });
     send({ type: "done", threadId: conv.threadId });
   } catch (err) {
     console.error(err);
     send({ type: "error", message: String(err?.message || err) });
   } finally {
+    if (budgetTimer) clearTimeout(budgetTimer);
     activeRuns.delete(conv.id);
     clearInterval(heartbeat);
     res.end();
