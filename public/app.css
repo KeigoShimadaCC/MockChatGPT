@@ -346,16 +346,19 @@ body {
   padding: 8px 0 6px;
 }
 
-/* ---------- research mode picker ---------- */
+/* ---------- research mode picker & critic toggle ---------- */
 #mode-picker { position: relative; align-self: flex-end; }
-#mode-btn {
+#mode-btn, #critic-btn {
   display: flex; align-items: center; gap: 6px;
   background: none; border: 1px solid var(--border); border-radius: 999px;
   color: var(--text-secondary); cursor: pointer; padding: 7px 12px; font-size: 13px;
   margin-bottom: 3px;
 }
-#mode-btn:hover { background: var(--bg-hover); }
-#mode-btn.active { border-color: #2964aa; color: #2964aa; background: rgba(41,100,170,0.08); }
+#critic-btn { align-self: flex-end; flex-shrink: 0; }
+#mode-btn:hover, #critic-btn:hover { background: var(--bg-hover); }
+#mode-btn.active, #critic-btn.active {
+  border-color: #2964aa; color: #2964aa; background: rgba(41,100,170,0.08);
+}
 #mode-menu {
   position: absolute; bottom: 110%; left: 0; z-index: 60; min-width: 250px;
   background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
@@ -368,6 +371,27 @@ body {
   font-size: 13px; color: var(--text-secondary);
 }
 .menu-check input { accent-color: var(--accent); }
+
+/* ---------- shadow critic note ---------- */
+/* Deliberately quiet: a thin strip that reads as marginalia, never competing
+   with the answer above it. */
+.critic-note {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin-top: 12px; padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: 10px;
+  font-size: 13px; line-height: 1.5; color: var(--text-secondary);
+}
+.critic-note .critic-glyph { flex-shrink: 0; opacity: 0.7; }
+.critic-note .critic-body { min-width: 0; }
+.critic-note ul, .critic-note ol { padding-left: 1.2em; margin: 0; }
+.critic-note li { margin: 0.15em 0; }
+.critic-note p { margin: 0; }
+.critic-note p + p, .critic-note > .critic-body > * + * { margin-top: 0.4em; }
+.critic-note.ok {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 999px; font-size: 12px;
+}
+.critic-note.ok .critic-body { color: #3a8f5c; }
 
 /* ---------- slash macro menu & usage chart ---------- */
 #macro-menu {

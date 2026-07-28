@@ -366,6 +366,7 @@ function renderConversation() {
       if (m.audit) slot.appendChild(buildAuditCard(m.audit, false));
       msg.appendChild(slot);
       const actions = [];
+      if (m.critic) msg.appendChild(buildCriticNote(m.critic));
       if (editable && i === msgs.length - 1) {
         actions.push(["⟳ Regenerate", "Try this answer again", regenerateLast]);
       }
@@ -473,6 +474,7 @@ async function streamTurn({ text = "", attachments = [], replaceLast = "", resea
       shell.content.appendChild(renderMarkdown(`⚠️ **Error:** ${err.message}`));
     }
   } finally {
+    clearCriticShimmer(shell);
     finalizeShell(shell);
     if (!state.final && shell.content.childNodes.length === 0) {
       shell.content.appendChild(renderMarkdown("_(no response)_"));
@@ -540,10 +542,22 @@ function handleStreamEvent(ev, shell, state) {
       if (ev.type !== "assistant_delta") state.final = true;
       scrollToBottom();
       break;
+    case "critic_pending":
+      clearCriticShimmer(shell);
+      shell.msg.appendChild(buildCriticShimmer());
+      scrollToBottom();
+      break;
+    case "critic":
+      clearCriticShimmer(shell);
+      shell.msg.appendChild(buildCriticNote(ev.text === "LGTM" ? { ok: true } : { text: ev.text }));
+      scrollToBottom();
+      break;
     case "error":
       shell.content.appendChild(renderMarkdown(`\n\n⚠️ ${ev.message}`));
       break;
     case "done":
+      // A critique that timed out or failed emits nothing — drop its shimmer.
+      clearCriticShimmer(shell);
       state.final = true;
       state.saved = true;
       finalizeShell(shell);
@@ -1144,6 +1158,7 @@ async function saveModelSettings(patch) {
 async function loadModelSettings() {
   currentSettings = await fetch("/api/settings").then((r) => r.json());
   updateModelUI();
+  updateCriticUI();
 }
 
 $("#model-badge").addEventListener("click", (e) => {
@@ -1199,6 +1214,64 @@ modeMenu.querySelectorAll("[data-mode]").forEach((b) =>
     updateModeUI();
   }));
 document.addEventListener("click", () => (modeMenu.hidden = true));
+
+/* ---------------- shadow critic ---------------- */
+
+// A composer toggle rather than a per-turn mode: it lives in settings so the
+// server can decide, turn by turn, whether to run the observer review.
+const criticBtn = $("#critic-btn");
+
+function updateCriticUI() {
+  criticBtn.classList.toggle("active", !!currentSettings.shadowCritic);
+}
+
+criticBtn.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const next = !currentSettings.shadowCritic;
+  currentSettings = { ...currentSettings, shadowCritic: next };
+  updateCriticUI(); // optimistic — the pill should feel instant
+  await saveModelSettings({ shadowCritic: next });
+  updateCriticUI();
+});
+
+// The review is markdown bullets; `ok` means the reviewer replied LGTM and the
+// note collapses to a checkmark.
+function buildCriticNote(critic) {
+  const note = document.createElement("div");
+  note.className = "critic-note";
+  const glyph = document.createElement("span");
+  glyph.className = "critic-glyph";
+  glyph.textContent = "🕶";
+  const body = document.createElement("div");
+  body.className = "critic-body";
+  if (critic.ok) {
+    note.classList.add("ok");
+    note.title = "Shadow critic found no issues";
+    body.textContent = "✓";
+  } else {
+    note.title = "Shadow critic";
+    body.appendChild(renderMarkdown(critic.text));
+  }
+  note.append(glyph, body);
+  return note;
+}
+
+function buildCriticShimmer() {
+  const note = document.createElement("div");
+  note.className = "critic-note critic-pending";
+  const glyph = document.createElement("span");
+  glyph.className = "critic-glyph";
+  glyph.textContent = "🕶";
+  const body = document.createElement("div");
+  body.className = "critic-body thinking-shimmer";
+  body.textContent = "Shadow critic reviewing…";
+  note.append(glyph, body);
+  return note;
+}
+
+function clearCriticShimmer(shell) {
+  shell.msg.querySelector(".critic-pending")?.remove();
+}
 
 /* ---------------- projects ---------------- */
 
