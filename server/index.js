@@ -377,7 +377,7 @@ app.post("/api/conversations/:id/messages", async (req, res) => {
     ? setTimeout(() => {
         run.stopped = true;
         run.controller.abort();
-        send({ type: "activity", kind: "error", label: "Time budget hit", detail: `Turn stopped after ${maxMin} min (set in Settings).`, done: true });
+        sendAndRecord({ type: "activity", id: "time-budget", kind: "error", label: "Time budget hit", detail: `Turn stopped after ${maxMin} min (set in Settings).`, done: true });
       }, maxMin * 60000)
     : null;
   try {
