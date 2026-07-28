@@ -31,7 +31,19 @@ export function listConversations() {
     .map((f) => {
       try {
         const c = JSON.parse(fs.readFileSync(path.join(CONV_DIR, f), "utf8"));
-        return { id: c.id, title: c.title, projectId: c.projectId || null, updatedAt: c.updatedAt, createdAt: c.createdAt };
+        return {
+          id: c.id,
+          title: c.title,
+          projectId: c.projectId || null,
+          updatedAt: c.updatedAt,
+          createdAt: c.createdAt,
+          // branch family fields — the client builds the whole tree out of this
+          // list, so no separate family endpoint is needed
+          parentId: c.parentId || null,
+          forkOfIndex: Number.isInteger(c.forkOfIndex) ? c.forkOfIndex : null,
+          branchLabel: c.branchLabel || "",
+          messageCount: c.messages?.length || 0,
+        };
       } catch {
         return null;
       }
@@ -59,6 +71,38 @@ export function createConversation(projectId = null) {
     projectId,
     threadId: null,
     messages: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  return saveConversation(conv);
+}
+
+/* ---------------- branching ---------------- */
+
+// Forks a conversation at `messageIndex`: the child keeps messages[0..index] and
+// starts life without a codex thread. Codex threads can't be forked, so the
+// copied transcript is replayed into the child's first turn (see `seedPending`
+// in server/index.js) instead of being resumed.
+export function branchConversation(id, { messageIndex, label = "" } = {}) {
+  const parent = getConversation(id);
+  if (!parent) throw new Error("conversation not found");
+  const idx = Number(messageIndex);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= parent.messages.length) {
+    throw new Error("bad messageIndex");
+  }
+  const branchLabel = String(label || "").trim().slice(0, 60);
+  const conv = {
+    id: crypto.randomUUID(),
+    title: branchLabel || parent.title,
+    projectId: parent.projectId || null,
+    threadId: null,
+    parentId: parent.id,
+    forkOfIndex: idx,
+    branchLabel,
+    // consumed by the first turn, which replays the copied transcript to the
+    // fresh thread. Cleared only once that thread actually exists.
+    seedPending: true,
+    messages: parent.messages.slice(0, idx + 1).map((m) => ({ ...m })),
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };

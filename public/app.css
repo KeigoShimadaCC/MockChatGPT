@@ -489,7 +489,62 @@ button.primary {
   font-size: 14px; font-weight: 600; cursor: pointer;
 }
 
+/* ---------- Branch explorer ---------- */
+.fork-glyph { font-family: ui-monospace, Menlo, monospace; }
+#branches-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 5px 12px; font-size: 12.5px; color: var(--text-secondary);
+}
+#branches-btn[hidden] { display: none; }
+#branches-count { opacity: 0.8; }
+.conv-fork { color: var(--text-secondary); font-family: ui-monospace, Menlo, monospace; margin-right: 4px; }
+
+.branch-modal { width: min(720px, 94vw); }
+#branch-tree { display: flex; flex-direction: column; gap: 4px; }
+.branch-row { display: flex; align-items: center; gap: 8px; }
+.branch-row .b-rail { color: var(--text-secondary); opacity: 0.5; font-family: ui-monospace, Menlo, monospace; flex: none; user-select: none; }
+.branch-row input[type="checkbox"] { flex: none; cursor: pointer; }
+.branch-node {
+  display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+  font-size: 13.5px; cursor: pointer; background: none; text-align: left;
+  color: var(--text); font-family: inherit;
+}
+.branch-node:hover { background: var(--bg-hover); }
+.branch-node.current { border-color: var(--text-secondary); background: var(--bg-hover); }
+.branch-node .grow { flex: 1; min-width: 0; }
+.branch-node .b-title { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.branch-node .b-title span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.branch-node .b-here {
+  font-weight: 400; font-size: 11px; color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; flex: none;
+}
+.branch-node .meta { color: var(--text-secondary); font-size: 12px; margin-top: 2px; }
+
+#branch-diff:empty { display: none; }
+#branch-diff { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 14px; }
+#branch-diff h3 { font-size: 14px; }
+.diff-panes { display: flex; gap: 10px; align-items: stretch; }
+.diff-pane {
+  flex: 1 1 0; min-width: 0; border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; overflow-x: auto; max-height: 46vh; overflow-y: auto;
+}
+.diff-pane .d-label {
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.diff-pane .d-text { font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.d-text ins, .d-text del { text-decoration: none; border-radius: 3px; padding: 0 1px; }
+.d-text del { background: rgba(224, 46, 42, 0.18); }
+.d-text ins { background: rgba(29, 155, 76, 0.20); }
+@media (prefers-color-scheme: dark) {
+  .d-text del { background: rgba(248, 81, 73, 0.26); }
+  .d-text ins { background: rgba(63, 185, 80, 0.26); }
+}
+
 @media (max-width: 720px) {
   #sidebar { position: fixed; z-index: 50; height: 100%; }
   #sidebar.hidden { margin-left: -260px; }
+  .diff-panes { flex-direction: column; }
 }

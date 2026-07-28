@@ -102,6 +102,31 @@ Rewrite memory.md in your workspace root, in place, so it stays useful as it gro
 Touch no other file. Reply with ONE line summarizing what changed, e.g. "Merged 6 duplicates, dropped 2 stale entries — 18 bullets down to 11."`;
 }
 
+// Branched conversations start on a fresh Codex thread — threads can't be
+// forked — so the transcript copied from the parent is replayed once, on the
+// branch's first turn, right after the preamble. Long messages are truncated:
+// this is context, not a verbatim archive.
+const SEED_MAX_CHARS = 500;
+
+export function branchSeed(messages) {
+  const turns = messages
+    .map((m) => {
+      const who = m.role === "user" ? "User" : "Assistant";
+      let text = String(m.text || "").trim();
+      if (!text) text = m.attachments?.length ? "(attachments only)" : "(empty)";
+      if (text.length > SEED_MAX_CHARS) text = text.slice(0, SEED_MAX_CHARS).trimEnd() + " […truncated]";
+      return `${who}: ${text}`;
+    })
+    .join("\n\n");
+  return `<branch_context>
+This conversation branched from an earlier one; here is the exchange so far:
+
+${turns}
+
+Treat that exchange as conversation you have already had with this user — context you remember, not something to summarize or comment on. Long messages above were truncated. The user's next message continues from that point, possibly in a new direction. Don't mention branching unless the user brings it up.
+</branch_context>`;
+}
+
 // Injected once per Codex thread (first turn of each conversation).
 export function buildPreamble(projectId = null) {
   const settings = readSettings();

@@ -30,6 +30,7 @@ The goal: a chat app a ChatGPT user feels immediately at home in, backed by a ge
 | 📊 Activity & usage dashboard | "What did my agent do?" audit feed across all chats + token usage heat-bar chart; per-message token counts in the Thinking header |
 | ⌨️ Slash macros & profiles | User-defined `/commands` with `{{var}}` fill-in forms; switchable instruction profiles (Work/Personal/…) |
 | ⏱️ Turn time budget | Optional hard cap: stop any turn after N minutes (Settings) |
+| ⑂ Branch explorer | Fork any assistant message into a labelled child chat; a "⑂ Branches" panel draws the family as a tree and word-diffs any two branches' latest answers side by side |
 
 ## Quick start
 
